@@ -1,0 +1,16 @@
+# Created by .ignore support plugin (hsz.mobi)
+### macOS template
+*.DS_Store
+.AppleDouble
+.LSOverride
+
+### Node
+package-lock.json
+node_modules/
+cache/
+typechain-types/
+
+### Contract
+artifacts/
+.deploys/
+.deps/
