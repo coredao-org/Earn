@@ -8,9 +8,13 @@ import "./lib/Structs.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./interface/IValidatorSet.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 
-contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
+contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
+    using Address for address payable;
 
     // Exchange rate multiple
     uint16 constant private RATE_MULTIPLE = 10000; 
@@ -35,7 +39,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     IterableAddressDelegateMapping.Map private validatorDelegateMap;
 
     // The time locked when user redeem Core
-    uint16 public constant LOCK_DAY = 7;
+    uint256 public lockDay = 7;
     uint256 public constant INIT_DAY_INTERVAL = 86400;
 
     // Account redeem record
@@ -43,6 +47,9 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     mapping(address => RedeemRecord[]) private redeemRecords;
 
     uint256 public balanceThreshold = 10000 ether;
+    uint256 public delegateMinLimit = 1 ether;
+    uint256 public redeemMinLimit = 1 ether;
+    uint256 public pledgeAgentLimit = 1 ether;
 
     constructor(address _stCore) {
         STCORE = _stCore;
@@ -55,12 +62,12 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     }
     
     // Proxy user pledge, at the same time exchange STCore
-    function delegateStaking() public payable nonReentrant {
+    function mint() public payable nonReentrant whenNotPaused{
         address account = msg.sender;
         uint256 amount = msg.value;
 
         // Determine the minimum amount to pledge
-        if (amount < 1 ether) {
+        if (amount < delegateMinLimit) {
             revert IEarnErrors.EarnInvalidDelegateAmount(account, amount);
         }
 
@@ -119,7 +126,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
             DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
             if (delegateInfo.earning > 0) {
-                if(delegateInfo.earning > 1 ether) {
+                if(delegateInfo.earning > pledgeAgentLimit) {
                     // Delegate reward
                     uint256 delegateAmount = delegateInfo.earning;
                     bool success = _delegate(key, delegateAmount);
@@ -148,11 +155,11 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     }
 
     // Exchange STCore for Core
-    function redeem(uint256 stCore) public nonReentrant {
+    function redeem(uint256 stCore) public nonReentrant whenNotPaused{
          address account = msg.sender;
 
         // The amount exchanged must not be less than 1 ether
-        if (stCore < 1 ether) {
+        if (stCore < redeemMinLimit) {
             revert IEarnErrors.EarnInvalidExchangeAmount(account, stCore);
         }
        
@@ -174,13 +181,13 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
         }
 
         // Execute un delegate stragety
-        _unDelegateStratege(core);
+        _unDelegateWithStrategy(core);
 
         // Record the redemption record of the user with lock
         RedeemRecord memory redeemRecord = RedeemRecord({
             identity : uniqueIndex++,
             redeemTime: block.timestamp,
-            unlockTime: block.timestamp + INIT_DAY_INTERVAL * LOCK_DAY,
+            unlockTime: block.timestamp + INIT_DAY_INTERVAL * lockDay,
             amount: core,
             stCore: stCore
         });
@@ -189,7 +196,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     }
 
     // The user redeems the unlocked Core
-    function withdraw(uint256 identity) public nonReentrant {
+    function withdraw(uint256 identity) public nonReentrant whenNotPaused{
         address account = msg.sender;
         
         // The ID of the redemption record cannot be less than 1 
@@ -220,6 +227,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
                 // Maturity, successful redemption
                 index = i;
                 amount = record.amount;
+                break;
             }
         }
 
@@ -236,7 +244,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
         if (address(this).balance < amount) {
             revert IEarnErrors.EarnInsufficientBalance(address(this).balance, amount);
         }
-        payable(account).transfer(amount);
+        payable(account).sendValue(amount);
     }
 
     function beforeTurnRound() public onlyRegistry{
@@ -349,7 +357,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     }
 
     // Undelegate stragety
-    function _unDelegateStratege(uint256 amount) internal {
+    function _unDelegateWithStrategy(uint256 amount) internal {
         // Random validator position
         uint256 length = validatorDelegateMap.size();
         if (length == 0) {
@@ -357,9 +365,9 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
         }
         uint256 fromIndex = _randomIndex(length);
 
-        bool ring = false;
+        bool reachedEnd = false;
         uint256 index = fromIndex;
-        while(!(index == fromIndex && ring) && amount > 0) {
+        while(!(index == fromIndex && reachedEnd) && amount > 0) {
             address key = validatorDelegateMap.getKeyAtIndex(index);
             DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
@@ -374,9 +382,10 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
                     validatorDelegateMap.set(key, unDelegateInfo, false);
                     amount = 0;
                     _unDelegate(key, amount);
+                    break;
                 } else if (delegateInfo.amount > amount) {
                     // Delegate amount more than undelegate amount
-                    if (delegateInfo.amount >= amount + 1 ether) {
+                    if (delegateInfo.amount >= amount + pledgeAgentLimit) {
                         // Delegate amount fully covers undelegate amount
                         DelegateInfo memory unDelegateInfo = DelegateInfo({
                             amount: amount,
@@ -385,10 +394,11 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
                         validatorDelegateMap.set(key, unDelegateInfo, false);
                         amount = 0;
                         _unDelegate(key, amount);
+                        break;
                     } else {
-                        uint256 delegateAmount = amount - 1;
+                        uint256 delegateAmount = amount - pledgeAgentLimit;
                         uint256 delegatorLeftAmount = delegateInfo.amount - delegateAmount;
-                        if (delegateAmount > 1 ether && delegatorLeftAmount > 1 ether) {
+                        if (delegateAmount > pledgeAgentLimit && delegatorLeftAmount > pledgeAgentLimit) {
                             DelegateInfo memory unDelegateInfo = DelegateInfo({
                                 amount: delegateAmount,
                                 earning: 0
@@ -400,7 +410,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
                     }
                 } else {
                     // Delegate amount less than undelegate amount
-                    if (amount >= delegateInfo.amount + 1) {
+                    if (amount >= delegateInfo.amount + pledgeAgentLimit) {
                         DelegateInfo memory unDelegateInfo = DelegateInfo({
                             amount: delegateInfo.amount,
                             earning: 0
@@ -409,9 +419,9 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
                         amount -= delegateInfo.amount;
                         _unDelegate(key, delegateInfo.amount);
                     } else {
-                        uint256 delegateAmount = delegateInfo.amount - 1;
+                        uint256 delegateAmount = delegateInfo.amount - pledgeAgentLimit;
                         uint256 accountLeftAmount = amount - delegateAmount;
-                        if (delegateAmount > 1 ether && accountLeftAmount > 1 ether) {
+                        if (delegateAmount > pledgeAgentLimit && accountLeftAmount > pledgeAgentLimit) {
                             DelegateInfo memory unDelegateInfo = DelegateInfo({
                                 amount: delegateAmount,
                                 earning: 0
@@ -426,7 +436,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
 
             if (index == length - 1) {
                 index = 0;
-                ring = true;
+                reachedEnd = true;
             } else {
                 index++;
             }
@@ -462,11 +472,11 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
             uint256 balanceAfter = address(this).balance - amount;
             uint256 earning = balanceAfter - balanceBefore;
             if (earning > 0) {
-                DelegateInfo memory delegateFailed = DelegateInfo({
+                DelegateInfo memory unprocessedReward = DelegateInfo({
                     amount: 0,
                     earning: earning
                 });
-                validatorDelegateMap.set(validator, delegateFailed, true);
+                validatorDelegateMap.set(validator, unprocessedReward, true);
             }
         }
         return success;
@@ -481,29 +491,29 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
             uint256 balanceAfter = address(this).balance;
             uint256 earning = balanceAfter - balanceBefore;
             if (earning > 0) {
-                DelegateInfo memory delegateFailed = DelegateInfo({
+                DelegateInfo memory unprocessedReward = DelegateInfo({
                     amount: 0,
                     earning: earning
                 });
-                validatorDelegateMap.set(validator, delegateFailed, true);
+                validatorDelegateMap.set(validator, unprocessedReward, true);
             }
         }
         return success;
     }
 
     function _transfer(address from, address to, uint256 amount) internal {
-         uint256 balanceBefore = address(this).balance - amount;
+        uint256 balanceBefore = address(this).balance;
         bytes memory callData = abi.encodeWithSignature("transferCoin(address,address,uint256)", from, to, amount);
         (bool success, ) = PLEDGE_AGENT.call(callData);
         if (success) {
              uint256 balanceAfter = address(this).balance;
             uint256 earning = balanceAfter - balanceBefore;
             if (earning > 0) {
-                DelegateInfo memory delegateFailed = DelegateInfo({
+                DelegateInfo memory unprocessedReward = DelegateInfo({
                     amount: 0,
                     earning: earning
                 });
-                validatorDelegateMap.set(from, delegateFailed, true);
+                validatorDelegateMap.set(from, unprocessedReward, true);
             }
         }
     }
@@ -522,6 +532,26 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
 
     function _getValidators() internal view returns (address[] memory) {
         return VALIDATOR_SET.getValidators();
+    }
+
+    function voteBalanceThreshold(uint256 _balanceThreshold) public onlyOwner {
+        balanceThreshold = _balanceThreshold;
+    }
+
+    function voteDelegateMinLimit(uint256 _delegateMinLimit) public onlyOwner {
+        delegateMinLimit = _delegateMinLimit;
+    }
+
+    function voteRedeemMinLimit(uint256 _redeemMinLimit) public onlyOwner {
+        redeemMinLimit = _redeemMinLimit;
+    }
+
+    function votePledgeAgentLimit(uint256 _pledgeAgentLimit) public onlyOwner {
+        pledgeAgentLimit = _pledgeAgentLimit;
+    }
+
+    function voteLockDay(uint256 _lockDay) public onlyOwner {
+        lockDay = _lockDay;
     }
 
     // Invest or Donate
