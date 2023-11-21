@@ -18,7 +18,7 @@ struct DelegateAction {
 }
 
 struct RedeemRecord {
-    // Unique index redeem record
+    // Global unique index of redemption record
     uint256 identity;
 
     // Redeem action time
@@ -30,6 +30,6 @@ struct RedeemRecord {
     // Redeem amount
     uint256 amount;
 
-    // Amount of st core
+    // Amount of stCORE
     uint256 stCore;
 }
