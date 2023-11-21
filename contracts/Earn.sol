@@ -2,17 +2,20 @@
 pragma solidity 0.8.4;
 
 import "./interface/IAfterTurnRoundCallBack.sol";
+import "./interface/IValidatorSet.sol";
+import "./interface/IBeforeTurnRoundCallback.sol";
 import {IEarnErrors} from "./interface/IErrors.sol";
+
 import "./lib/IterableAddressDelegateMapping.sol";
 import "./lib/Structs.sol";
+
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "./interface/IValidatorSet.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 
-contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
+contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
     using Address for address payable;
 
@@ -260,7 +263,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     // Triggered right before turn round
     // This method cannot revert
     // The Earn contract rebalances staking on top/bottom validators in this method
-    function beforeTurnRound() public onlyRegistry{
+    function beforeTurnRound() public override onlyRegistry{
         if (validatorDelegateMap.size() == 0) {
             return;
         }
@@ -423,8 +426,11 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
                         earning: 0
                     });
                     validatorDelegateMap.set(key, unDelegateInfo, false);
+                    bool success = _unDelegate(key, amount);
+                    if (!success) {
+                        revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                    }
                     amount = 0;
-                    _unDelegate(key, amount);
                     break;
                 } else if (delegateInfo.amount > amount) {
                     if (delegateInfo.amount >= amount + pledgeAgentLimit) {
@@ -435,8 +441,11 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
                             earning: 0
                         });
                         validatorDelegateMap.set(key, unDelegateInfo, false);
+                        bool success = _unDelegate(key, amount);
+                        if (!success) {
+                            revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                        }
                         amount = 0;
-                        _unDelegate(key, amount);
                         break;
                     } else {
                         // Case 3: the amount available on the validator >= the amount needs to be undelegated AND
@@ -451,8 +460,11 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
                                 earning: 0
                             });
                             validatorDelegateMap.set(key, unDelegateInfo, false);
+                            bool success = _unDelegate(key, delegateAmount);
+                            if (!success) {
+                                revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                            }
                             amount -= delegateAmount; // amount equals to 1 ether
-                            _unDelegate(key, delegateAmount);
                         }
                     }
                 } else {
@@ -464,8 +476,11 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
                             earning: 0
                         });
                         validatorDelegateMap.set(key, unDelegateInfo, false);
+                        bool success = _unDelegate(key, delegateInfo.amount);
+                        if (!success) {
+                            revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                        }
                         amount -= delegateInfo.amount;
-                        _unDelegate(key, delegateInfo.amount);
                     } else {
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
                         //          the amount available on the validator <= the amount needs to be undelegated
@@ -479,8 +494,11 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
                                 earning: 0
                             });
                             validatorDelegateMap.set(key, unDelegateInfo, false);
+                            bool success = _unDelegate(key, delegateAmount);
+                            if (!success) {
+                                revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                            }
                             amount -= delegateAmount;
-                            _unDelegate(key, delegateAmount);
                         }
                     }
                 }
@@ -570,7 +588,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     }
 
     function _getValidators() internal view returns (address[] memory) {
-        return VALIDATOR_SET.getValidators();
+        return VALIDATOR_SET.getOperates();
     }
 
     /// --- ADMIN OPERATIONS --- ///

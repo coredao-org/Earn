@@ -2,5 +2,5 @@
 pragma solidity 0.8.4;
 
 interface IValidatorSet {
-  function getValidators() external view returns (address[] memory);
+  function getOperates() external view returns (address[] memory);
 }
