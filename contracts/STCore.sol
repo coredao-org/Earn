@@ -5,14 +5,14 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract STCore is ERC20, Ownable{
-    // Contract address of earn
+    // Contract address of EARN
     address private EARN;
 
     constructor() ERC20("Liquid staked CORE", "stCORE") {
     }
 
     modifier onlyEarn() {
-        require(msg.sender == EARN, "Not earn contract");
+        require(msg.sender == EARN, "Not EARN contract");
         _;
     }
 
