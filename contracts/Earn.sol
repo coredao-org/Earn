@@ -16,8 +16,8 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
     using Address for address payable;
 
-    // Exchange rate multiple
-    uint16 constant private RATE_MULTIPLE = 10000; 
+    // Exchange rate base
+    uint16 constant private RATE_BASE = 10000; 
 
     // Address of system contract: ValidatorSet
     IValidatorSet constant private VALIDATOR_SET = IValidatorSet(0x0000000000000000000000000000000000001000);
@@ -28,7 +28,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     // Address of system contract: Registry
     address constant private REGISTRY = 0x0000000000000000000000000000000000001010;
 
-    // Address of stcore contract: STCore
+    // Address of stCORE contract: STCORE
     address private STCORE; 
 
     // Exchange rate (conversion rate) of each round
@@ -38,12 +38,12 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     // Delegation records on each validator from the Earn contract
     IterableAddressDelegateMapping.Map private validatorDelegateMap;
 
-    // Redumption period
-    // It takes 7 days for users to get CORE back from Earn after requested redemption
+    // Redemption period
+    // It takes 7 days for users to get CORE back from Earn after requesting redemption
     uint256 public lockDay = 7;
     uint256 public constant INIT_DAY_INTERVAL = 86400;
 
-    // Redumption records are saved for each user
+    // Redemption records are saved for each user
     // The records been withdrawn are removed to improve iteration performance
     uint256 public uniqueIndex = 1;
     mapping(address => RedeemRecord[]) private redeemRecords;
@@ -56,11 +56,13 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
 
     constructor(address _stCore) {
         STCORE = _stCore;
-        exchangeRates.push(RATE_MULTIPLE);
+        exchangeRates.push(RATE_BASE);
     }
 
+    /// --- MODIFIERS --- ///
+
     modifier onlyRegistry() {
-        require(msg.sender == REGISTRY, "Not registry contract");
+        require(msg.sender == REGISTRY, "Not REGISTRY contract");
         _;
     }
     
@@ -123,6 +125,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
         // Burn stCORE
         uint256 totalSupply = IERC20(STCORE).totalSupply();
         if (stCore > totalSupply) {
+            // Should not happen
             revert IEarnErrors.EarnERC20InsufficientTotalSupply(account, stCore, totalSupply);
         }
         bytes memory callData = abi.encodeWithSignature("burn(address,uint256)", account, stCore);
@@ -146,16 +149,16 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
         records.push(redeemRecord);
     }
 
-    // Withdraw/claim CORE tokens after redumption period
+    // Withdraw/claim CORE tokens after redemption period
     function withdraw(uint256 identity) public nonReentrant whenNotPaused{
         address account = msg.sender;
         
-        // The ID of the redemption record cannot be less than 1 
+        // The ID of the redemption record must not be less than 1 
         if (identity < 1) {
             revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
         }
 
-        // Find user redumption records
+        // Find user redemption records
         RedeemRecord[] storage records = redeemRecords[account];
         if (records.length <= 0) {
             revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
@@ -167,27 +170,27 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
         for (uint i = 0; i < records.length; i++) {
             RedeemRecord memory record = records[i];
             if (record.identity == identity) {
-                // Find redumption record
+                // Find redemption record
                 if (!findRecord) {
                     findRecord = true;
                 }
                 if (record.unlockTime >= block.timestamp) {
-                    // In redumption period, revert
+                    // In redemption period, revert
                     revert IEarnErrors.EarnRedeemLocked(account, record.unlockTime, block.timestamp);
                 }
-                // Passed redumption period, eligible to withdraw
+                // Passed redemption period, eligible to withdraw
                 index = i;
                 amount = record.amount;
                 break;
             }
         }
 
-        // Redumption record not found
+        // redemption record not found
         if (!findRecord) {
             revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
         }
 
-        // Drop Redumption record, and transfer core to user
+        // Drop redemption record, and transfer CORE to user
         for (uint i = index; i < records.length - 1; i++) {
             records[i] = records[i + 1];
         }
@@ -249,7 +252,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
                 _capital += delegateInfo.amount;
             }
             if (_capital > 0) {
-                exchangeRates.push(_capital * RATE_MULTIPLE / totalSupply);
+                exchangeRates.push(_capital * RATE_BASE / totalSupply);
             }
         }
     }
@@ -290,7 +293,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
             return;
         }
 
-        // Transfer coin
+        // Transfer CORE to rebalance
         uint256 average = (max - min) / 2;
         _transfer(maxValidator, minValidator, average);
         DelegateInfo memory transferInfo = DelegateInfo({
@@ -359,12 +362,12 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
 
     // Core to STCore
     function _exchangeSTCore(uint256 core) internal view returns (uint256) {
-        return core * RATE_MULTIPLE / exchangeRates[exchangeRates.length-1];
+        return core * RATE_BASE / exchangeRates[exchangeRates.length-1];
     }
 
     // STCore to Core
     function _exchangeCore(uint256 stCore) internal view returns(uint256) {
-        return stCore * exchangeRates[exchangeRates.length-1] / RATE_MULTIPLE;
+        return stCore * exchangeRates[exchangeRates.length-1] / RATE_BASE;
     }
 
     // Delegate to validator
@@ -388,7 +391,15 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
         return success;
     }
 
-    // Undelegate CORE from validators with stragety
+    // Undelegate CORE from validators with strategy
+    // There is dues protection in PledageAgent, which are
+    //  1. Can only delegate 1+ CORE
+    //  2. Can only undelegate 1+ CORE AND can only leave 1+ CORE on validator after undelegate 
+    // Internally, Earn delegate/undelegate to validators on each mint/redeem action
+    // As a result, to make the system solid. For any undelegate action from Earn it must result in
+    //  1. The validator must be cleared or have 1+ CORE remaining after undelegate AND
+    //  2. Earn contract must have 0 or 1+ CORE on any validator after undelegate
+    // Otherwise, Earn might fail to undelegate further because of the dues protection from PledgeAgent
     function _unDelegateWithStrategy(uint256 amount) internal {
         // Random validator position
         uint256 length = validatorDelegateMap.size();
@@ -483,8 +494,8 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
             }
         }
 
-        // Earn protocol is insonvency
-        // In theory this could not happen if Earn is pro funded before open to public
+        // Earn protocol is insolvency
+        // In theory this could not happen if Earn is funded before open to public
         if (amount > 0) {
              revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
         }
@@ -554,8 +565,6 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
         return success;
     }
 
-    /// --- ADMIN OPERATIONS --- ///
-
     function _randomIndex(uint256 length) internal view returns (uint256) {
         return uint256(keccak256(abi.encodePacked(block.timestamp))) % length;
     }
@@ -563,6 +572,8 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     function _getValidators() internal view returns (address[] memory) {
         return VALIDATOR_SET.getValidators();
     }
+
+    /// --- ADMIN OPERATIONS --- ///
 
     function updateBalanceThreshold(uint256 _balanceThreshold) public onlyOwner {
         balanceThreshold = _balanceThreshold;
@@ -592,6 +603,5 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
         _unpause();
     }
 
-    // Invest or Donate
     receive() external payable {}
 }
