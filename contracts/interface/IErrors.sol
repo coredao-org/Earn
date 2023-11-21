@@ -22,13 +22,13 @@ interface IEarnErrors {
 
     error EarnInsufficientBalance(uint256 balance, uint256 amount);
 
-    error EarnUnDelegateFailed(address validator, uint256 amount);
+    error EarnUnDelegateFailed(address account, uint256 amount);
 
     error EarnDelegateInfoNotExist(address validator, uint256 amount);
-
-    error EarnInsufficientUndelegateAmount(address validator, uint256 amount);
-
-    error EarnInvalidRegistry(address registry);
     
     error EarnInvalidExchangeRatesTarget();
+
+    error EarnEmptyValidatorSet();
+
+    error EarnEmptyValidator();
 }

@@ -4,24 +4,24 @@ pragma solidity 0.8.4;
 import "./interface/IAfterTurnRoundCallBack.sol";
 import {IEarnErrors} from "./interface/IErrors.sol";
 import "./lib/IterableAddressDelegateMapping.sol";
-import "./lib/DelegateActionQueue.sol";
 import "./lib/Structs.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "./interface/IValidatorSet.sol";
 
 contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
-    using DelegateActionQueue for DelegateActionQueue.Queue;
 
     // Exchange rate multiple
     uint16 constant private RATE_MULTIPLE = 10000; 
 
-    // Address of system contract: CandidateHub
-    address constant private CANDIDATE_HUB = 0x0000000000000000000000000000000000001005; 
+    // Address of system contract: ValidatorSet
+    IValidatorSet constant private VALIDATOR_SET =  IValidatorSet(0x0000000000000000000000000000000000001000);
 
     // Address of system contract: PledgeAgent
     address constant private PLEDGE_AGENT = payable(0x0000000000000000000000000000000000001007);
 
+    // Address of system contract: Registry
     address constant private REGISTRY = 0x0000000000000000000000000000000000001010;
 
     // Address of stcore contract: STCore
@@ -33,7 +33,6 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
 
     // Map of the amount pledged by the validator
     IterableAddressDelegateMapping.Map private validatorDelegateMap;
-    DelegateActionQueue.Queue private delegateQueue; 
 
     // The time locked when user redeem Core
     uint16 public constant LOCK_DAY = 7;
@@ -43,13 +42,20 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     uint256 public uniqueIndex = 1;
     mapping(address => RedeemRecord[]) private redeemRecords;
 
+    uint256 public balanceThreshold = 10000 ether;
+
     constructor(address _stCore) {
         STCORE = _stCore;
         exchangeRates.push(RATE_MULTIPLE);
     }
+
+    modifier onlyRegistry() {
+        require(msg.sender == REGISTRY, "Not registry contract");
+        _;
+    }
     
     // Proxy user pledge, at the same time exchange STCore
-    function delegateStaking(address validator) public payable nonReentrant {
+    function delegateStaking() public payable nonReentrant {
         address account = msg.sender;
         uint256 amount = msg.value;
 
@@ -58,10 +64,13 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
             revert IEarnErrors.EarnInvalidDelegateAmount(account, amount);
         }
 
-        // Determines whether the validator is an empty address
-        if (validator == address(0)) {
-            revert IEarnErrors.EarnInvalidValidator(validator);    
+        // Select validator at random
+        address[] memory validatorSet = _getValidators();
+        if (validatorSet.length == 0) {
+            revert IEarnErrors.EarnEmptyValidatorSet();
         }
+        uint256 index = _randomIndex(validatorSet.length);
+        address validator = validatorSet[index];
 
         // Call PLEDGE_AGENT delegate
         bool success = _delegate(validator, amount);
@@ -88,11 +97,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
     // Triggered after turn round
     // Provider is responsible for the successful execution of the method. 
     // This method cannot revert
-    function afterTurnRound() public override {
-        if (msg.sender != REGISTRY) {
-            revert IEarnErrors.EarnInvalidRegistry(msg.sender);
-        }
-
+    function afterTurnRound() public override onlyRegistry {
         // Claim reward
         for (uint i = 0; i < validatorDelegateMap.size(); i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
@@ -169,7 +174,6 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
         }
 
         // Execute un delegate stragety
-        // This version implement by queue
         _unDelegateStratege(core);
 
         // Record the redemption record of the user with lock
@@ -233,6 +237,50 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
             revert IEarnErrors.EarnInsufficientBalance(address(this).balance, amount);
         }
         payable(account).transfer(amount);
+    }
+
+    function beforeTurnRound() public onlyRegistry{
+        if (validatorDelegateMap.size() == 0) {
+            return;
+        }
+
+        address key = validatorDelegateMap.getKeyAtIndex(0);
+        DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
+
+        // Find max and min delegate amount of validator
+        uint256 max = delegateInfo.amount;
+        address maxValidator = key;
+        uint256 min = delegateInfo.amount;
+        address minValidator = key;
+        for (uint i = 1; i < validatorDelegateMap.size(); i++) {
+            key = validatorDelegateMap.getKeyAtIndex(i);
+            delegateInfo = validatorDelegateMap.get(key);
+            if (delegateInfo.amount > max) {
+                max = delegateInfo.amount;
+                maxValidator = key;
+            } else if (delegateInfo.amount < min) {
+                min = delegateInfo.amount;
+                minValidator = key;
+            }
+        }
+
+        if (minValidator == maxValidator) {
+            return;
+        }
+
+        if (max - min < balanceThreshold) {
+            return;
+        }
+
+        // Transfer coin
+        uint256 average = (max - min) / 2;
+        _transfer(maxValidator, minValidator, average);
+        DelegateInfo memory transferInfo = DelegateInfo({
+            amount: average,
+            earning: 0
+        });
+        validatorDelegateMap.set(maxValidator, transferInfo, false);
+        validatorDelegateMap.set(minValidator, transferInfo, true);
     }
 
     function getRedeemRecords() public view returns (RedeemRecord[] memory) {
@@ -300,49 +348,108 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
         // return stCore * exchangeRate / RATE_MULTIPLE;
     }
 
-    // Undelegate stragety: queue version
+    // Undelegate stragety
     function _unDelegateStratege(uint256 amount) internal {
-        uint256 unDelegateAmount = 0;
+        // Random validator position
+        uint256 length = validatorDelegateMap.size();
+        if (length == 0) {
+            revert IEarnErrors.EarnEmptyValidator();
+        }
+        uint256 fromIndex = _randomIndex(length);
 
-        while (true) {
-            // The amount that the current cycle needs to process
-            uint256 processAmount = amount - unDelegateAmount;
+        bool ring = false;
+        uint256 index = fromIndex;
+        while(!(index == fromIndex && ring) && amount > 0) {
+            address key = validatorDelegateMap.getKeyAtIndex(index);
+            DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
-            DelegateAction memory action = delegateQueue.dequeue();
-            if (processAmount == action.amount) {
-                // Undelegate amount equal to dequeue amount
-                bool success = _unDelegate(action.validator, action.amount);
-                if (!success) {
-                    revert IEarnErrors.EarnUnDelegateFailed(action.validator, action.amount);
+            // If delegate amount equals zero, indicates this item to be deleted later
+            if (delegateInfo.amount > 0) {
+                if (delegateInfo.amount == amount) {
+                    // Delegate amount just covers undelegate amount
+                    DelegateInfo memory unDelegateInfo = DelegateInfo({
+                        amount: amount,
+                        earning: 0
+                    });
+                    validatorDelegateMap.set(key, unDelegateInfo, false);
+                    amount = 0;
+                    _unDelegate(key, amount);
+                } else if (delegateInfo.amount > amount) {
+                    // Delegate amount more than undelegate amount
+                    if (delegateInfo.amount >= amount + 1 ether) {
+                        // Delegate amount fully covers undelegate amount
+                        DelegateInfo memory unDelegateInfo = DelegateInfo({
+                            amount: amount,
+                            earning: 0
+                        });
+                        validatorDelegateMap.set(key, unDelegateInfo, false);
+                        amount = 0;
+                        _unDelegate(key, amount);
+                    } else {
+                        uint256 delegateAmount = amount - 1;
+                        uint256 delegatorLeftAmount = delegateInfo.amount - delegateAmount;
+                        if (delegateAmount > 1 ether && delegatorLeftAmount > 1 ether) {
+                            DelegateInfo memory unDelegateInfo = DelegateInfo({
+                                amount: delegateAmount,
+                                earning: 0
+                            });
+                            validatorDelegateMap.set(key, unDelegateInfo, false);
+                            amount -= delegateAmount; // amount equals to 1 ether
+                            _unDelegate(key, delegateAmount);
+                        }
+                    }
+                } else {
+                    // Delegate amount less than undelegate amount
+                    if (amount >= delegateInfo.amount + 1) {
+                        DelegateInfo memory unDelegateInfo = DelegateInfo({
+                            amount: delegateInfo.amount,
+                            earning: 0
+                        });
+                        validatorDelegateMap.set(key, unDelegateInfo, false);
+                        amount -= delegateInfo.amount;
+                        _unDelegate(key, delegateInfo.amount);
+                    } else {
+                        uint256 delegateAmount = delegateInfo.amount - 1;
+                        uint256 accountLeftAmount = amount - delegateAmount;
+                        if (delegateAmount > 1 ether && accountLeftAmount > 1 ether) {
+                            DelegateInfo memory unDelegateInfo = DelegateInfo({
+                                amount: delegateAmount,
+                                earning: 0
+                            });
+                            validatorDelegateMap.set(key, unDelegateInfo, false);
+                            amount -= delegateAmount;
+                            _unDelegate(key, delegateAmount);
+                        }
+                    }
                 }
-                _adjustDelegateMap(action.validator, action.amount);
-                break;
-            } else if (processAmount > action.amount){
-                // Undelegate amount greatter than dequeue amount
-                // Need to continue the cycle
-                bool success = _unDelegate(action.validator, action.amount);
-                if (!success) {
-                    revert IEarnErrors.EarnUnDelegateFailed(action.validator, action.amount);
-                }
-                _adjustDelegateMap(action.validator, action.amount);
-                unDelegateAmount += action.amount;
-            } else if(processAmount < action.amount) {
-                // Undelegate amount less than dequeue amount
-                // Need to exit the cycle
-                bool success = _unDelegate(action.validator, processAmount);
-                if (!success) {
-                    revert IEarnErrors.EarnUnDelegateFailed(action.validator, processAmount);
-                }
-                _adjustDelegateMap(action.validator, processAmount);
-
-                // The remaining amount enqueue again
-                DelegateAction memory reAction = DelegateAction({
-                    validator: action.validator,
-                    amount: action.amount - processAmount
-                });
-                delegateQueue.enqueue(reAction);
-                break;
             }
+
+            if (index == length - 1) {
+                index = 0;
+                ring = true;
+            } else {
+                index++;
+            }
+        }
+
+        // Undelegate failed
+        if (amount > 0) {
+             revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+        }
+
+        // Remove empty validator
+        uint256 deleteSize = 0;
+        address[] memory deleteKeys = new address[](validatorDelegateMap.size());
+        for (uint i = 0; i < validatorDelegateMap.size(); i++) {
+            address key = validatorDelegateMap.getKeyAtIndex(i);
+            DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
+            if (delegateInfo.amount == 0 && delegateInfo.earning == 0) {
+                deleteKeys[deleteSize] = key;
+                deleteSize++;
+            }
+        }
+        for (uint i = 0; i < deleteSize; i++) {
+            validatorDelegateMap.remove(deleteKeys[i]);
         }
     }
 
@@ -380,14 +487,25 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
                 });
                 validatorDelegateMap.set(validator, delegateFailed, true);
             }
-
-            DelegateAction memory action = DelegateAction({
-                validator: validator,
-                amount: amount
-            });
-            delegateQueue.enqueue(action);
         }
         return success;
+    }
+
+    function _transfer(address from, address to, uint256 amount) internal {
+         uint256 balanceBefore = address(this).balance - amount;
+        bytes memory callData = abi.encodeWithSignature("transferCoin(address,address,uint256)", from, to, amount);
+        (bool success, ) = PLEDGE_AGENT.call(callData);
+        if (success) {
+             uint256 balanceAfter = address(this).balance;
+            uint256 earning = balanceAfter - balanceBefore;
+            if (earning > 0) {
+                DelegateInfo memory delegateFailed = DelegateInfo({
+                    amount: 0,
+                    earning: earning
+                });
+                validatorDelegateMap.set(from, delegateFailed, true);
+            }
+        }
     }
 
     function _claim(address validator) internal returns (bool){
@@ -398,26 +516,12 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard {
         return success;
     }
 
-    function _adjustDelegateMap(address validator, uint256 amount) internal {
-        if (!validatorDelegateMap.exist(validator)) {
-            revert IEarnErrors.EarnDelegateInfoNotExist(validator, amount);
-        }
+    function _randomIndex(uint256 length) internal view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.timestamp))) % length;
+    }
 
-        DelegateInfo memory delegateInfo = validatorDelegateMap.get(validator);
-        if (delegateInfo.amount == amount) {
-            // The amount recorded by the validator is equal to undelegate amount
-            validatorDelegateMap.remove(validator);
-        } else if (delegateInfo.amount > amount) {
-            // The amount recorded by the validator is greater than undelegate amount
-            DelegateInfo memory unDelegateInfo = DelegateInfo({
-                amount: amount,
-                earning: 0
-            });
-            validatorDelegateMap.set(validator, unDelegateInfo, false);
-        } else {
-            // The amount recorded by the validator is less than undelegate amount, revert
-            revert IEarnErrors.EarnInsufficientUndelegateAmount(validator, amount);
-        }
+    function _getValidators() internal view returns (address[] memory) {
+        return VALIDATOR_SET.getValidators();
     }
 
     // Invest or Donate
