@@ -15,6 +15,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 
+// TODO protocol fees
+
 contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
     using Address for address payable;
