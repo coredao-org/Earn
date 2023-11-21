@@ -20,7 +20,7 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
     uint16 constant private RATE_MULTIPLE = 10000; 
 
     // Address of system contract: ValidatorSet
-    IValidatorSet constant private VALIDATOR_SET =  IValidatorSet(0x0000000000000000000000000000000000001000);
+    IValidatorSet constant private VALIDATOR_SET = IValidatorSet(0x0000000000000000000000000000000000001000);
 
     // Address of system contract: PledgeAgent
     address constant private PLEDGE_AGENT = payable(0x0000000000000000000000000000000000001007);
@@ -552,6 +552,14 @@ contract Earn is IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
 
     function voteLockDay(uint256 _lockDay) public onlyOwner {
         lockDay = _lockDay;
+    }
+
+    function pause() public onlyOwner {
+        _pause();
+    }
+
+    function unpause() public onlyOwner {
+        _unpause();
     }
 
     // Invest or Donate
