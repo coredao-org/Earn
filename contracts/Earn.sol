@@ -427,12 +427,12 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
                         amount: amount,
                         earning: 0
                     });
-                    validatorDelegateMap.set(key, unDelegateInfo, false);
                     bool success = _unDelegate(key, amount);
                     if (!success) {
                         revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
                     }
                     amount = 0;
+                    validatorDelegateMap.set(key, unDelegateInfo, false);
                     break;
                 } else if (delegateInfo.amount > amount) {
                     if (delegateInfo.amount >= amount + pledgeAgentLimit) {
@@ -442,12 +442,12 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
                             amount: amount,
                             earning: 0
                         });
-                        validatorDelegateMap.set(key, unDelegateInfo, false);
                         bool success = _unDelegate(key, amount);
                         if (!success) {
                             revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
                         }
                         amount = 0;
+                        validatorDelegateMap.set(key, unDelegateInfo, false);
                         break;
                     } else {
                         // Case 3: the amount available on the validator >= the amount needs to be undelegated AND
@@ -461,12 +461,12 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
                                 amount: delegateAmount,
                                 earning: 0
                             });
-                            validatorDelegateMap.set(key, unDelegateInfo, false);
                             bool success = _unDelegate(key, delegateAmount);
                             if (!success) {
                                 revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
                             }
                             amount -= delegateAmount; // amount equals to 1 ether
+                            validatorDelegateMap.set(key, unDelegateInfo, false);
                         }
                     }
                 } else {
@@ -477,12 +477,12 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
                             amount: delegateInfo.amount,
                             earning: 0
                         });
-                        validatorDelegateMap.set(key, unDelegateInfo, false);
                         bool success = _unDelegate(key, delegateInfo.amount);
                         if (!success) {
                             revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
                         }
                         amount -= delegateInfo.amount;
+                        validatorDelegateMap.set(key, unDelegateInfo, false);
                     } else {
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
                         //          the amount available on the validator <= the amount needs to be undelegated
@@ -495,12 +495,12 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
                                 amount: delegateAmount,
                                 earning: 0
                             });
-                            validatorDelegateMap.set(key, unDelegateInfo, false);
                             bool success = _unDelegate(key, delegateAmount);
                             if (!success) {
                                 revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
                             }
                             amount -= delegateAmount;
+                            validatorDelegateMap.set(key, unDelegateInfo, false);
                         }
                     }
                 }
