@@ -40,22 +40,24 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
     // Exchange rate is calculated and updated at the beginning of each round
     uint256[] public exchangeRates;
 
-    // Delegation records on each validator from the Earn contract
+    // Delegate records on each validator from the Earn contract
     IterableAddressDelegateMapping.Map private validatorDelegateMap;
 
-    // Redemption period
-    // It takes 7 days for users to get CORE back from Earn after requesting redemption
+    // redemption period
+    // It takes 7 days for users to get CORE back from Earn after requesting redeem
     uint256 public lockDay = 7;
     uint256 public constant INIT_DAY_INTERVAL = 86400;
 
-    // Redemption records are saved for each user
+    // Redeem records are saved for each user
     // The records been withdrawn are removed to improve iteration performance
     uint256 public uniqueIndex = 1;
     mapping(address => RedeemRecord[]) private redeemRecords;
 
     // The threshold to tigger rebalance in beforeTurnRound()
     uint256 public balanceThreshold = 10000 ether;
-    uint256 public delegateMinLimit = 1 ether;
+
+    // Dues protections
+    uint256 public mintMinLimit = 1 ether;
     uint256 public redeemMinLimit = 1 ether;
     uint256 public pledgeAgentLimit = 1 ether;
 
@@ -79,7 +81,7 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
         uint256 amount = msg.value;
 
         // dues protection 
-        if (amount < delegateMinLimit) {
+        if (amount < mintMinLimit) {
             revert IEarnErrors.EarnInvalidDelegateAmount(account, amount);
         }
 
@@ -158,12 +160,12 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
     function withdraw(uint256 identity) public nonReentrant whenNotPaused{
         address account = msg.sender;
         
-        // The ID of the redemption record must not be less than 1 
+        // The ID of the redeem record must not be less than 1 
         if (identity < 1) {
             revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
         }
 
-        // Find user redemption records
+        // Find user redeem records
         RedeemRecord[] storage records = redeemRecords[account];
         if (records.length <= 0) {
             revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
@@ -175,7 +177,7 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
         for (uint i = 0; i < records.length; i++) {
             RedeemRecord memory record = records[i];
             if (record.identity == identity) {
-                // Find redemption record
+                // Find redeem record
                 if (!findRecord) {
                     findRecord = true;
                 }
@@ -190,12 +192,12 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
             }
         }
 
-        // redemption record not found
+        // redeem record not found
         if (!findRecord) {
             revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
         }
 
-        // Drop redemption record, and transfer CORE to user
+        // Drop redeem record, and transfer CORE to user
         for (uint i = index; i < records.length - 1; i++) {
             records[i] = records[i + 1];
         }
@@ -599,8 +601,8 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
         balanceThreshold = _balanceThreshold;
     }
 
-    function updateDelegateMinLimit(uint256 _delegateMinLimit) public onlyOwner {
-        delegateMinLimit = _delegateMinLimit;
+    function updateMintMinLimit(uint256 _mintMinLimit) public onlyOwner {
+        mintMinLimit = _mintMinLimit;
     }
 
     function updateRedeemMinLimit(uint256 _redeemMinLimit) public onlyOwner {
