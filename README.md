@@ -1,4 +1,4 @@
-# Install dependencies steps
+# Install dependencies steps [[ do not merge]]
 
 1. Install node on MacOS, if other operating system refer to https://hardhat.org/tutorial/setting-up-the-environment.
 
@@ -15,4 +15,3 @@
    ```shell
    npm install
    ```
-
