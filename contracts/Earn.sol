@@ -65,6 +65,28 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     address public operator;
     uint256 public lastOperateRound;
 
+    // User operations event
+    event Mint(address account, uint256 core, uint256 stCore);
+    event Delegate(address validator, uint256 amount);
+    event UnDelegate(address validator, uint256);
+    event Transfer(address from, address to, uint256 amount);
+    event Redeem(address account, uint256 stCore, uint256 core, uint256 protocolFee);
+    event Withdraw(address account, uint256 amount);
+
+    // Operator operations event
+    event CalculateExchangeRate(uint256 round, uint256 exchangeRate);
+    event ReBalance(address from, address to, uint256 amount);
+
+    // Admin operations event
+    event UpdateBalanceThreshold(address caller, uint256 balanceThreshold);
+    event UpdateMintMinLimit(address caller, uint256 mintMinLimit);
+    event UpdateRedeemMinLimit(address caller, uint256 redeemMinLimit);
+    event UpdatePledgeAgentLimit(address caller, uint256 pledgeAgentLimit);
+    event UdpateLockDay(address caller, uint256 lockDay);
+    event UpdateProtocolFeePoints(address caller, uint256 protocolFeePoints);
+    event UpdateProtocolFeeReveiver(address caller, address protocolFeeReceiver);
+    event UpdateOperator(address caller, address _operator);
+
     constructor(address _stCore, address _protocolFeeReceiver, address _operator) {
         // protocol fee receiver address protection
         if (_protocolFeeReceiver == address(0)) {
@@ -137,6 +159,8 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         if (!success) {
             revert IEarnErrors.EarnCallStCoreMintFailed(account, amount, stCore);
         }
+
+        emit Mint(account, amount, stCore);
     }
 
     // Redeem stCORE to get back CORE
@@ -168,15 +192,18 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         }
 
         // Update local records
+        uint256 redeemAmount = core - protocolFee;
         RedeemRecord memory redeemRecord = RedeemRecord({
             identity : uniqueIndex++,
             redeemTime: block.timestamp,
             unlockTime: block.timestamp + INIT_DAY_INTERVAL * lockDay,
-            amount: core - protocolFee,
+            amount: redeemAmount,
             stCore: stCore
         });
         RedeemRecord[] storage records = redeemRecords[account];
         records.push(redeemRecord);
+
+        emit Redeem(account, stCore, redeemAmount, protocolFee);
     }
 
     // Withdraw/claim CORE tokens after redemption period
@@ -233,6 +260,8 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
         // transfer balance to user
         payable(account).sendValue(amount);
+
+        emit Withdraw(account, amount);
     }
 
     /// --- SYSTEM HOOKS --- ///
@@ -276,6 +305,9 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             }
         }
 
+        // get current round
+        uint256 currentRound = _currentRound();
+
         // Update exchange rate
         uint256 totalSupply = IERC20(STCORE).totalSupply();
         if (totalSupply > 0) {
@@ -286,12 +318,15 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                 _capital += delegateInfo.amount;
             }
             if (_capital > 0) {
-                exchangeRates.push(_capital * RATE_BASE / totalSupply);
+                uint256 rate = _capital * RATE_BASE / totalSupply;
+                exchangeRates.push(rate);
+                
+                emit CalculateExchangeRate(currentRound, rate);
             }
         }
 
         // set last operate round to current round tag
-        lastOperateRound = _currentRound();
+        lastOperateRound = currentRound;
     }
 
     // Triggered right before turn round
@@ -349,6 +384,8 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             });
             validatorDelegateMap.set(maxValidator, transferInfo, false);
             validatorDelegateMap.set(minValidator, transferInfo, true);
+
+            emit ReBalance(maxValidator, minValidator, transferAmount);
         }
     }
 
@@ -441,6 +478,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                 });
                 validatorDelegateMap.set(validator, unprocessedReward, true);
             }
+            emit Delegate(validator, amount);
         }
         return success;
     }
@@ -602,6 +640,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                 });
                 validatorDelegateMap.set(validator, unprocessedReward, true);
             }
+            emit UnDelegate(validator, amount);
         }
         return success;
     }
@@ -612,7 +651,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         bytes memory callData = abi.encodeWithSignature("transferCoin(address,address,uint256)", from, to, amount);
         (bool success, ) = PLEDGE_AGENT.call(callData);
         if (success) {
-             uint256 balanceAfter = address(this).balance;
+            uint256 balanceAfter = address(this).balance;
             uint256 earning = balanceAfter - balanceBefore;
             if (earning > 0) {
                 // This shall not happen as all rewards are claimed in afterTurnRound()
@@ -623,6 +662,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                 });
                 validatorDelegateMap.set(from, unprocessedReward, true);
             }
+            emit Transfer(from, to, amount);
         }
     }
 
@@ -642,22 +682,27 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
     function updateBalanceThreshold(uint256 _balanceThreshold) public onlyOwner {
         balanceThreshold = _balanceThreshold;
+        emit UpdateBalanceThreshold(msg.sender, _balanceThreshold);
     }
 
     function updateMintMinLimit(uint256 _mintMinLimit) public onlyOwner {
         mintMinLimit = _mintMinLimit;
+        emit UpdateMintMinLimit(msg.sender, _mintMinLimit);
     }
 
     function updateRedeemMinLimit(uint256 _redeemMinLimit) public onlyOwner {
         redeemMinLimit = _redeemMinLimit;
+        emit UpdateRedeemMinLimit(msg.sender, _redeemMinLimit);
     }
 
     function updatePledgeAgentLimit(uint256 _pledgeAgentLimit) public onlyOwner {
         pledgeAgentLimit = _pledgeAgentLimit;
+        emit UpdatePledgeAgentLimit(msg.sender, _pledgeAgentLimit);
     }
 
     function udpateLockDay(uint256 _lockDay) public onlyOwner {
         lockDay = _lockDay;
+        emit UdpateLockDay(msg.sender, _lockDay);
     }
 
     function updateProtocolFeePoints(uint256 _protocolFeePoints) public onlyOwner {
@@ -665,6 +710,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             revert IEarnErrors.EarnProtocolFeePointMoreThanRateBase(_protocolFeePoints);
         }
         protocolFeePoints = _protocolFeePoints;
+        emit UpdateProtocolFeePoints(msg.sender, _protocolFeePoints);
     }
 
     function updateProtocolFeeReveiver(address _protocolFeeReceiver) public onlyOwner {
@@ -673,6 +719,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             revert IEarnErrors.EarnZeroProtocolFeeReceiver(_protocolFeeReceiver);
         }
         protocolFeeReceiver = _protocolFeeReceiver;
+        emit UpdateProtocolFeeReveiver(msg.sender, _protocolFeeReceiver);
     }
 
     function updateOperator(address _operator) public onlyOwner {
@@ -680,6 +727,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             revert IEarnErrors.EarnZeroOperator(_operator);
         }
         operator = _operator;
+        emit UpdateOperator(msg.sender, _operator);
     }
 
     function pause() public onlyOwner {

@@ -8,19 +8,18 @@ contract STCore is ERC20, Ownable{
     // Contract address of EARN
     address public earn;
 
-    constructor() ERC20("Liquid staked CORE", "stCORE") {
-    }
+    constructor() ERC20("Liquid staked CORE", "stCORE") {}
 
     modifier onlyEarn() {
         require(msg.sender == earn, "Not Earn contract");
         _;
     }
 
-    function mint(address account, uint256 amount) public onlyEarn{
+    function mint(address account, uint256 amount) public onlyEarn {
         _mint(account, amount);
     }
 
-    function burn(address account, uint256 amount) public onlyEarn{
+    function burn(address account, uint256 amount) public onlyEarn {
         _burn(account, amount);
     } 
 
