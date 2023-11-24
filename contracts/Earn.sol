@@ -55,7 +55,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     uint256 public redeemMinLimit = 1 ether;
     uint256 public pledgeAgentLimit = 1 ether;
 
-    // Protocal fee foints and fee receiver
+    // Protocol fee foints and fee receiver
     // Set 0 ~ 1000000
     // 100000 = 10%
     uint256 public protocolFeePoints = 0;
@@ -65,10 +65,15 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     address public operator;
     uint256 public lastOperateRound;
 
-    constructor(address _stCore) {
+    constructor(address _stCore, address _protocolFeeReceiver, address _operator) {
+        if (_protocolFeeReceiver == address(0)) {
+            revert IEarnErrors.EarnInvalidProtocolFeeReceiver(address(0));
+        }
         STCORE = _stCore;
         exchangeRates.push(RATE_BASE);
         lastOperateRound = _currentRound();
+        protocolFeeReceiver = _protocolFeeReceiver;
+        operator = _operator;
     }
 
     /// --- MODIFIERS --- ///
@@ -132,16 +137,11 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         }
        
         uint256 core = _exchangeCore(stCore);
-        if (core <= 0) {
+        if (core == 0) {
             revert IEarnErrors.EarnInvalidExchangeAmount(account, stCore);
         }
 
         // Burn stCORE
-        uint256 totalSupply = IERC20(STCORE).totalSupply();
-        if (stCore > totalSupply) {
-            // Should not happen
-            revert IEarnErrors.EarnERC20InsufficientTotalSupply(account, stCore, totalSupply);
-        }
         bytes memory callData = abi.encodeWithSignature("burn(address,uint256)", account, stCore);
         (bool success, ) = STCORE.call(callData);
         if (!success) {
@@ -151,14 +151,11 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         // Undelegate CORE from validators
         _unDelegateWithStrategy(core);
 
-        // Calculate protocal fee
-        uint256 protocalFee = core * protocolFeePoints / RATE_BASE;
-        // Transfer protocalFee to fee receiver
-        if (protocalFee > 0) {
-            if (protocolFeeReceiver == address(0)) {
-                revert IEarnErrors.EarnInvalidProtocalFeeReceiver(address(0));
-            }
-            payable(protocolFeeReceiver).sendValue(protocalFee);
+        // Calculate protocol fee
+        uint256 protocolFee = core * protocolFeePoints / RATE_BASE;
+        // Transfer protocolFee to fee receiver
+        if (protocolFee != 0) {
+            payable(protocolFeeReceiver).sendValue(protocolFee);
         }
 
         // Update local records
@@ -166,7 +163,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             identity : uniqueIndex++,
             redeemTime: block.timestamp,
             unlockTime: block.timestamp + INIT_DAY_INTERVAL * lockDay,
-            amount: core - protocalFee,
+            amount: core - protocolFee,
             stCore: stCore
         });
         RedeemRecord[] storage records = redeemRecords[account];
@@ -184,14 +181,14 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
         // Find user redeem records
         RedeemRecord[] storage records = redeemRecords[account];
-        if (records.length <= 0) {
+        if (records.length == 0) {
             revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
         }
 
         bool findRecord = false;
-        uint index = 0;
+        uint256 index = 0;
         uint256 amount = 0;
-        for (uint i = 0; i < records.length; i++) {
+        for (uint256 i = 0; i < records.length; i++) {
             RedeemRecord memory record = records[i];
             if (record.identity == identity) {
                 // Find redeem record
@@ -214,14 +211,20 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
         }
 
-        // Drop redeem record, and transfer CORE to user
-        for (uint i = index; i < records.length - 1; i++) {
-            records[i] = records[i + 1];
-        }
-        records.pop();
+        // check contract balance
         if (address(this).balance < amount) {
             revert IEarnErrors.EarnInsufficientBalance(address(this).balance, amount);
         }
+
+        // Drop redeem record, and transfer CORE to user
+        // TODO: Consider whether the order needs to be maintained
+        // If not, reppace with records[index] = records[records.length - 1]
+        for (uint256 i = index; i < records.length - 1; i++) {
+            records[i] = records[i + 1];
+        }
+        records.pop();
+
+        // transfer balance to user
         payable(account).sendValue(amount);
     }
 
@@ -235,7 +238,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     //  3. Update daily exchange rate
     function afterTurnRound() public onlyOperator {
         // Claim rewards
-        for (uint i = 0; i < validatorDelegateMap.size(); i++) {
+        for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
             DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
@@ -250,7 +253,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
         // Delegate rewards
         // Auto compounding
-        for (uint i = 0; i < validatorDelegateMap.size(); i++) {
+        for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
             DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
@@ -270,7 +273,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         uint256 totalSupply = IERC20(STCORE).totalSupply();
         if (totalSupply > 0) {
             uint256 _capital = 0;
-            for (uint i = 0; i < validatorDelegateMap.size(); i++) {
+            for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
                 address key = validatorDelegateMap.getKeyAtIndex(i);
                 DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
                 _capital += delegateInfo.amount;
@@ -300,7 +303,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         address maxValidator = key;
         uint256 min = delegateInfo.amount;
         address minValidator = key;
-        for (uint i = 1; i < validatorDelegateMap.size(); i++) {
+        for (uint256 i = 1; i < validatorDelegateMap.size(); i++) {
             key = validatorDelegateMap.getKeyAtIndex(i);
             delegateInfo = validatorDelegateMap.get(key);
             if (delegateInfo.amount > max) {
@@ -321,13 +324,20 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         }
 
         // Transfer CORE to rebalance
-        uint256 average = (max - min) / 2;
-        if (average >= pledgeAgentLimit && max - average >= pledgeAgentLimit) {
-            _unDelegate(maxValidator, average);
-            _delegate(minValidator, average);
+        uint256 transferAmount = (max - min) / 2;
+        if (transferAmount >= pledgeAgentLimit && max - transferAmount >= pledgeAgentLimit) {
+            bool success = _unDelegate(maxValidator, transferAmount);
+            if (!success) {
+                revert IEarnErrors.EarnReBalanceFailed();
+            }
+
+            success = _delegate(minValidator, transferAmount);
+            if (!success) {
+                revert IEarnErrors.EarnReBalanceFailed();
+            }
 
             DelegateInfo memory transferInfo = DelegateInfo({
-                amount: average,
+                amount: transferAmount,
                 earning: 0
             });
             validatorDelegateMap.set(maxValidator, transferInfo, false);
@@ -341,8 +351,8 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     }
 
     function getRedeemAmount() public view returns (uint256 unlockedAmount, uint256 lockedAmount) {
-        RedeemRecord[] memory records = redeemRecords[msg.sender];        
-        for (uint i = 0; i < records.length; i++) {
+        RedeemRecord[] storage records = redeemRecords[msg.sender];
+        for (uint256 i = 0; i < records.length; i++) {
             RedeemRecord memory record = records[i];
              if (record.unlockTime >= block.timestamp) {
                 unlockedAmount += record.amount;
@@ -357,9 +367,9 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             revert IEarnErrors.EarnInvalidExchangeRatesTarget();
         }
 
-        uint size = exchangeRates.length;
-        uint from = 0;
-        uint count;
+        uint256 size = exchangeRates.length;
+        uint256 from = 0;
+        uint256 count;
         if (target >= size) {
             count = size;
         } else {
@@ -367,8 +377,8 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             count = target;
         }
 
-        uint256[] memory result = new uint[](count);
-        for (uint i = from; i < size; i++) {
+        uint256[] memory result = new uint256[](count);
+        for (uint256 i = from; i < size; i++) {
             result[i-from] = exchangeRates[i];
         }
 
@@ -381,7 +391,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
     function getTotalDelegateAmount() public view returns (uint256) {
         uint256 amount = 0;
-        for (uint i = 0; i < validatorDelegateMap.size(); i++) {
+        for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
             DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
             amount += delegateInfo.amount;
@@ -555,7 +565,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         // Remove empty validator
         uint256 deleteSize = 0;
         address[] memory deleteKeys = new address[](validatorDelegateMap.size());
-        for (uint i = 0; i < validatorDelegateMap.size(); i++) {
+        for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
             DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
             if (delegateInfo.amount == 0 && delegateInfo.earning == 0) {
@@ -563,7 +573,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                 deleteSize++;
             }
         }
-        for (uint i = 0; i < deleteSize; i++) {
+        for (uint256 i = 0; i < deleteSize; i++) {
             validatorDelegateMap.remove(deleteKeys[i]);
         }
     }
@@ -645,7 +655,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
     function updateProtocolFeePoints(uint256 _protocolFeePoints) public onlyOwner {
         if (_protocolFeePoints > RATE_BASE) {
-            revert IEarnErrors.EarnProtocalFeePointMoreThanRateBase(_protocolFeePoints);
+            revert IEarnErrors.EarnProtocolFeePointMoreThanRateBase(_protocolFeePoints);
         }
         protocolFeePoints = _protocolFeePoints;
     }
@@ -653,7 +663,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     function updateProtocolFeeReveiver(address _protocolFeeReceiver) public onlyOwner {
         // validator address protection
         if (_protocolFeeReceiver == address(0)) {
-            revert IEarnErrors.EarnInvalidProtocalFeeReceiver(_protocolFeeReceiver);
+            revert IEarnErrors.EarnInvalidProtocolFeeReceiver(_protocolFeeReceiver);
         }
         protocolFeeReceiver = _protocolFeeReceiver;
     }

@@ -32,9 +32,11 @@ interface IEarnErrors {
 
     error EarnEmptyValidator();
 
-    error EarnProtocalFeePointMoreThanRateBase(uint256 protocalFeePoint);
+    error EarnProtocolFeePointMoreThanRateBase(uint256 protocolFeePoint);
 
-    error EarnInvalidProtocalFeeReceiver(address protocalFeeReceiver);
+    error EarnInvalidProtocolFeeReceiver(address protocolFeeReceiver);
 
     error EarnInvalidOperator(address operator);
+
+    error EarnReBalanceFailed();
 }
