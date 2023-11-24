@@ -16,3 +16,11 @@
    npm install
    ```
 
+# Deply contracts
+
+1. Deploy STCore.sol
+1. Deploy Earn.sol using STCore's address
+1. Call STCore's `setEarnAddress(address _earn)` using Earn's address
+1. Call Earn's `updateOperator(address _operator)`
+1. Call Earn's `updateProtocolFeeReveiver(address _protocolFeeReceiver)`
+

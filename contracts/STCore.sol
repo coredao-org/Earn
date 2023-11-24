@@ -6,13 +6,13 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract STCore is ERC20, Ownable{
     // Contract address of EARN
-    address private EARN;
+    address public earn;
 
     constructor() ERC20("Liquid staked CORE", "stCORE") {
     }
 
     modifier onlyEarn() {
-        require(msg.sender == EARN, "Not EARN contract");
+        require(msg.sender == earn, "Not Earn contract");
         _;
     }
 
@@ -26,6 +26,6 @@ contract STCore is ERC20, Ownable{
 
     // Only owner can modify earn address
     function setEarnAddress(address _earn) public onlyOwner {
-        EARN = _earn;
+        earn = _earn;
     }
 }

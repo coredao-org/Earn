@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache2.0
 pragma solidity 0.8.4;
 
-import "./interface/IAfterTurnRoundCallBack.sol";
 import "./interface/IValidatorSet.sol";
-import "./interface/IBeforeTurnRoundCallback.sol";
 import {IEarnErrors} from "./interface/IErrors.sol";
+import "./interface/ICandidateHub.sol";
 
 import "./lib/IterableAddressDelegateMapping.sol";
 import "./lib/Structs.sol";
@@ -15,26 +14,21 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 
-// TODO protocol fees
-
-contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGuard, Ownable, Pausable {
+contract Earn is ReentrancyGuard, Ownable, Pausable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
     using Address for address payable;
 
     // Exchange rate base
-    uint16 constant private RATE_BASE = 10000; 
+    uint256 constant private RATE_BASE = 1000000; 
 
-    // Address of system contract: ValidatorSet
-    IValidatorSet constant private VALIDATOR_SET = IValidatorSet(0x0000000000000000000000000000000000001000);
+    // Address of system contract: CandidateHub
+    address constant private CANDIDATE_HUB = 0x0000000000000000000000000000000000001005; 
 
     // Address of system contract: PledgeAgent
     address constant private PLEDGE_AGENT = payable(0x0000000000000000000000000000000000001007);
 
-    // Address of system contract: Registry
-    address constant private REGISTRY = 0x0000000000000000000000000000000000001010;
-
     // Address of stCORE contract: STCORE
-    address private STCORE; 
+    address public STCORE; 
 
     // Exchange rate (conversion rate) of each round
     // Exchange rate is calculated and updated at the beginning of each round
@@ -61,22 +55,38 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
     uint256 public redeemMinLimit = 1 ether;
     uint256 public pledgeAgentLimit = 1 ether;
 
+    // Protocal fee foints and fee receiver
+    // Set 0 ~ 1000000
+    // 100000 = 10%
+    uint256 public protocolFeePoints = 0;
+    address public protocolFeeReceiver;
+
+    // Operate afterRound and rebalance
+    address public operator;
+    uint256 public lastOperateRound;
+
     constructor(address _stCore) {
         STCORE = _stCore;
         exchangeRates.push(RATE_BASE);
+        lastOperateRound = _currentRound();
     }
 
     /// --- MODIFIERS --- ///
 
-    modifier onlyRegistry() {
-        require(msg.sender == REGISTRY, "Not REGISTRY contract");
+    modifier onlyOperator() {
+        require(msg.sender == operator, "Not Operator");
+        _;
+    }
+
+    modifier afterSettled() {
+        require(lastOperateRound == _currentRound(), "Wait to after round");
         _;
     }
     
     /// --- USER INTERACTIONS --- ///
 
     // Mint stCORE using CORE 
-    function mint() public payable nonReentrant whenNotPaused{
+    function mint(address validator) public payable afterSettled nonReentrant whenNotPaused{
         address account = msg.sender;
         uint256 amount = msg.value;
 
@@ -85,13 +95,10 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
             revert IEarnErrors.EarnInvalidDelegateAmount(account, amount);
         }
 
-        // Select a validator randomly
-        address[] memory validatorSet = _getValidators();
-        if (validatorSet.length == 0) {
-            revert IEarnErrors.EarnEmptyValidatorSet();
+        // validator address protection
+        if (validator == address(0)) {
+            revert IEarnErrors.EarnInvalidValidator(validator);
         }
-        uint256 index = _randomIndex(validatorSet.length);
-        address validator = validatorSet[index];
 
         // Delegate CORE to PledgeAgent
         bool success = _delegate(validator, amount);
@@ -116,7 +123,7 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
     }
 
     // Redeem stCORE to get back CORE
-    function redeem(uint256 stCore) public nonReentrant whenNotPaused{
+    function redeem(uint256 stCore) public afterSettled nonReentrant whenNotPaused{
          address account = msg.sender;
 
         // Dues protection
@@ -144,12 +151,22 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
         // Undelegate CORE from validators
         _unDelegateWithStrategy(core);
 
+        // Calculate protocal fee
+        uint256 protocalFee = core * protocolFeePoints / RATE_BASE;
+        // Transfer protocalFee to fee receiver
+        if (protocalFee > 0) {
+            if (protocolFeeReceiver == address(0)) {
+                revert IEarnErrors.EarnInvalidProtocalFeeReceiver(address(0));
+            }
+            payable(protocolFeeReceiver).sendValue(protocalFee);
+        }
+
         // Update local records
         RedeemRecord memory redeemRecord = RedeemRecord({
             identity : uniqueIndex++,
             redeemTime: block.timestamp,
             unlockTime: block.timestamp + INIT_DAY_INTERVAL * lockDay,
-            amount: core,
+            amount: core - protocalFee,
             stCore: stCore
         });
         RedeemRecord[] storage records = redeemRecords[account];
@@ -157,7 +174,7 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
     }
 
     // Withdraw/claim CORE tokens after redemption period
-    function withdraw(uint256 identity) public nonReentrant whenNotPaused{
+    function withdraw(uint256 identity) public afterSettled nonReentrant whenNotPaused{
         address account = msg.sender;
         
         // The ID of the redeem record must not be less than 1 
@@ -216,7 +233,7 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
     //  1. Claim rewards from each validator
     //  2. Stake rewards back to corresponding validators (auto compounding)
     //  3. Update daily exchange rate
-    function afterTurnRound() public override onlyRegistry {
+    function afterTurnRound() public onlyOperator {
         // Claim rewards
         for (uint i = 0; i < validatorDelegateMap.size(); i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
@@ -262,12 +279,15 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
                 exchangeRates.push(_capital * RATE_BASE / totalSupply);
             }
         }
+
+        // set last operate round to current round tag
+        lastOperateRound = _currentRound();
     }
 
     // Triggered right before turn round
     // This method cannot revert
     // The Earn contract rebalances staking on top/bottom validators in this method
-    function beforeTurnRound() public override onlyRegistry{
+    function reBalance() public afterSettled onlyOperator{
         if (validatorDelegateMap.size() == 0) {
             return;
         }
@@ -302,13 +322,17 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
 
         // Transfer CORE to rebalance
         uint256 average = (max - min) / 2;
-        _transfer(maxValidator, minValidator, average);
-        DelegateInfo memory transferInfo = DelegateInfo({
-            amount: average,
-            earning: 0
-        });
-        validatorDelegateMap.set(maxValidator, transferInfo, false);
-        validatorDelegateMap.set(minValidator, transferInfo, true);
+        if (average >= pledgeAgentLimit && max - average >= pledgeAgentLimit) {
+            _unDelegate(maxValidator, average);
+            _delegate(minValidator, average);
+
+            DelegateInfo memory transferInfo = DelegateInfo({
+                amount: average,
+                earning: 0
+            });
+            validatorDelegateMap.set(maxValidator, transferInfo, false);
+            validatorDelegateMap.set(minValidator, transferInfo, true);
+        }
     }
 
     /// --- VIEW METHODS ---///
@@ -363,6 +387,12 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
             amount += delegateInfo.amount;
         }
         return amount;
+    }
+
+
+    // Get current round
+    function _currentRound() internal view returns (uint256) {
+        return ICandidateHub(CANDIDATE_HUB).getRoundTag();
     }
 
     /// --- INTERNAL METHODS --- ///
@@ -591,10 +621,6 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
         return uint256(keccak256(abi.encodePacked(block.timestamp))) % length;
     }
 
-    function _getValidators() internal view returns (address[] memory) {
-        return VALIDATOR_SET.getOperates();
-    }
-
     /// --- ADMIN OPERATIONS --- ///
 
     function updateBalanceThreshold(uint256 _balanceThreshold) public onlyOwner {
@@ -615,6 +641,28 @@ contract Earn is IBeforeTurnRoundCallBack, IAfterTurnRoundCallBack, ReentrancyGu
 
     function udpateLockDay(uint256 _lockDay) public onlyOwner {
         lockDay = _lockDay;
+    }
+
+    function updateProtocolFeePoints(uint256 _protocolFeePoints) public onlyOwner {
+        if (_protocolFeePoints > RATE_BASE) {
+            revert IEarnErrors.EarnProtocalFeePointMoreThanRateBase(_protocolFeePoints);
+        }
+        protocolFeePoints = _protocolFeePoints;
+    }
+
+    function updateProtocolFeeReveiver(address _protocolFeeReceiver) public onlyOwner {
+        // validator address protection
+        if (_protocolFeeReceiver == address(0)) {
+            revert IEarnErrors.EarnInvalidProtocalFeeReceiver(_protocolFeeReceiver);
+        }
+        protocolFeeReceiver = _protocolFeeReceiver;
+    }
+
+    function updateOperator(address _operator) public onlyOwner {
+        if (_operator == address(0)) {
+            revert IEarnErrors.EarnInvalidOperator(_operator);
+        }
+        operator = _operator;
     }
 
     function pause() public onlyOwner {
