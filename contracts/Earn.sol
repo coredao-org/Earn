@@ -66,9 +66,16 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     uint256 public lastOperateRound;
 
     constructor(address _stCore, address _protocolFeeReceiver, address _operator) {
+        // protocol fee receiver address protection
         if (_protocolFeeReceiver == address(0)) {
-            revert IEarnErrors.EarnInvalidProtocolFeeReceiver(address(0));
+            revert IEarnErrors.EarnZeroProtocolFeeReceiver(_protocolFeeReceiver);
         }
+
+        // operator address protection
+        if (_operator == address(0)) {
+            revert IEarnErrors.EarnZeroOperator(_operator);
+        }
+
         STCORE = _stCore;
         exchangeRates.push(RATE_BASE);
         lastOperateRound = _currentRound();
@@ -97,22 +104,27 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
         // dues protection 
         if (amount < mintMinLimit) {
-            revert IEarnErrors.EarnInvalidDelegateAmount(account, amount);
+            revert IEarnErrors.EarnMintAmountTooSmall(account, amount);
         }
 
         // validator address protection
         if (validator == address(0)) {
-            revert IEarnErrors.EarnInvalidValidator(validator);
+            revert IEarnErrors.EarnZeroValidator(validator);
+        }
+
+        // check validator can be delegated
+        if (!ICandidateHub(CANDIDATE_HUB).canDelegate(validator)) {
+            revert IEarnErrors.EarnCanNotDelegateValidator(validator);
         }
 
         // Delegate CORE to PledgeAgent
         bool success = _delegate(validator, amount);
         if (!success) {
-            revert IEarnErrors.EarnDelegateFailed(account, validator,amount);
+            revert IEarnErrors.EarnDelegateFailedWhileMint(account, validator,amount);
         }
 
         // Update local records
-         DelegateInfo memory delegateInfo = DelegateInfo({
+        DelegateInfo memory delegateInfo = DelegateInfo({
             amount: amount,
             earning: 0
         });
@@ -123,7 +135,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         bytes memory callData = abi.encodeWithSignature("mint(address,uint256)", account, stCore);
         (success, ) = STCORE.call(callData);
         if (!success) {
-            revert IEarnErrors.EarnMintFailed(account, amount, stCore);
+            revert IEarnErrors.EarnCallStCoreMintFailed(account, amount, stCore);
         }
     }
 
@@ -133,19 +145,16 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
         // Dues protection
         if (stCore < redeemMinLimit) {
-            revert IEarnErrors.EarnInvalidExchangeAmount(account, stCore);
+            revert IEarnErrors.EarnSTCoreTooSmall(account, stCore);
         }
        
         uint256 core = _exchangeCore(stCore);
-        if (core == 0) {
-            revert IEarnErrors.EarnInvalidExchangeAmount(account, stCore);
-        }
 
         // Burn stCORE
         bytes memory callData = abi.encodeWithSignature("burn(address,uint256)", account, stCore);
         (bool success, ) = STCORE.call(callData);
         if (!success) {
-            revert IEarnErrors.EarnBurnFailed(account, core, stCore);
+            revert IEarnErrors.EarnCallStCoreBurnFailed(account, core, stCore);
         }
 
         // Undelegate CORE from validators
@@ -176,13 +185,13 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         
         // The ID of the redeem record must not be less than 1 
         if (identity < 1) {
-            revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
+            revert IEarnErrors.EarnRedeemRecordIdMustGreaterThanZero(account, identity);
         }
 
         // Find user redeem records
         RedeemRecord[] storage records = redeemRecords[account];
         if (records.length == 0) {
-            revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
+            revert IEarnErrors.EarnEmptyRedeemRecord();
         }
 
         bool findRecord = false;
@@ -208,7 +217,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
         // redeem record not found
         if (!findRecord) {
-            revert IEarnErrors.EarnInvalidRedeemRecordId(account, identity);
+            revert IEarnErrors.EarnRedeemRecordNotFound(account, identity);
         }
 
         // check contract balance
@@ -217,8 +226,6 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         }
 
         // Drop redeem record, and transfer CORE to user
-        // TODO: Consider whether the order needs to be maintained
-        // If not, reppace with records[index] = records[records.length - 1]
         for (uint256 i = index; i < records.length - 1; i++) {
             records[i] = records[i + 1];
         }
@@ -328,12 +335,12 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         if (transferAmount >= pledgeAgentLimit && max - transferAmount >= pledgeAgentLimit) {
             bool success = _unDelegate(maxValidator, transferAmount);
             if (!success) {
-                revert IEarnErrors.EarnReBalanceFailed();
+                revert IEarnErrors.EarnReBalancUnDelegateFailed(maxValidator, transferAmount);
             }
 
             success = _delegate(minValidator, transferAmount);
             if (!success) {
-                revert IEarnErrors.EarnReBalanceFailed();
+                revert IEarnErrors.EarnReBalancDelegateFailed(minValidator, transferAmount);
             }
 
             DelegateInfo memory transferInfo = DelegateInfo({
@@ -362,9 +369,9 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         }
     }
 
-    function getExchangeRates(uint256 target) public view returns(uint256[] memory) {
+    function getExchangeRates(uint256 target) public view returns(uint256[] memory _exchangeRates) {
          if (target < 1) {
-            revert IEarnErrors.EarnInvalidExchangeRatesTarget();
+            return _exchangeRates;
         }
 
         uint256 size = exchangeRates.length;
@@ -377,12 +384,12 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             count = target;
         }
 
-        uint256[] memory result = new uint256[](count);
+        _exchangeRates = new uint256[](count);
         for (uint256 i = from; i < size; i++) {
-            result[i-from] = exchangeRates[i];
+            _exchangeRates[i-from] = exchangeRates[i];
         }
 
-        return result;
+        return _exchangeRates;
     }
 
     function getCurrentExchangeRate() public view  returns (uint256) {
@@ -471,7 +478,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                     });
                     bool success = _unDelegate(key, amount);
                     if (!success) {
-                        revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                        revert IEarnErrors.EarnUnDelegateFailedCase1(msg.sender, amount);
                     }
                     amount = 0;
                     validatorDelegateMap.set(key, unDelegateInfo, false);
@@ -486,7 +493,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                         });
                         bool success = _unDelegate(key, amount);
                         if (!success) {
-                            revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                            revert IEarnErrors.EarnUnDelegateFailedCase2(msg.sender, amount);
                         }
                         amount = 0;
                         validatorDelegateMap.set(key, unDelegateInfo, false);
@@ -505,7 +512,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                             });
                             bool success = _unDelegate(key, delegateAmount);
                             if (!success) {
-                                revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                                revert IEarnErrors.EarnUnDelegateFailedCase3(msg.sender, amount);
                             }
                             amount -= delegateAmount; // amount equals to 1 ether
                             validatorDelegateMap.set(key, unDelegateInfo, false);
@@ -521,7 +528,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                         });
                         bool success = _unDelegate(key, delegateInfo.amount);
                         if (!success) {
-                            revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                            revert IEarnErrors.EarnUnDelegateFailedCase4(msg.sender, amount);
                         }
                         amount -= delegateInfo.amount;
                         validatorDelegateMap.set(key, unDelegateInfo, false);
@@ -539,7 +546,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                             });
                             bool success = _unDelegate(key, delegateAmount);
                             if (!success) {
-                                revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+                                revert IEarnErrors.EarnUnDelegateFailedCase5(msg.sender, amount);
                             }
                             amount -= delegateAmount;
                             validatorDelegateMap.set(key, unDelegateInfo, false);
@@ -559,7 +566,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         // Earn protocol is insolvency
         // In theory this could not happen if Earn is funded before open to public
         if (amount > 0) {
-             revert IEarnErrors.EarnUnDelegateFailed(msg.sender, amount);
+             revert IEarnErrors.EarnUnDelegateFailedFinally(msg.sender, amount);
         }
 
         // Remove empty validator
@@ -663,14 +670,14 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     function updateProtocolFeeReveiver(address _protocolFeeReceiver) public onlyOwner {
         // validator address protection
         if (_protocolFeeReceiver == address(0)) {
-            revert IEarnErrors.EarnInvalidProtocolFeeReceiver(_protocolFeeReceiver);
+            revert IEarnErrors.EarnZeroProtocolFeeReceiver(_protocolFeeReceiver);
         }
         protocolFeeReceiver = _protocolFeeReceiver;
     }
 
     function updateOperator(address _operator) public onlyOwner {
         if (_operator == address(0)) {
-            revert IEarnErrors.EarnInvalidOperator(_operator);
+            revert IEarnErrors.EarnZeroOperator(_operator);
         }
         operator = _operator;
     }

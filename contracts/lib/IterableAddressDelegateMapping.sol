@@ -8,7 +8,6 @@ library IterableAddressDelegateMapping {
         address[] keys;
         mapping(address => DelegateInfo) values;
         mapping(address => uint) indexOf;
-        mapping(address => bool) inserted;
     }
 
     function get(Map storage map, address key) internal view returns (DelegateInfo storage) {
@@ -24,7 +23,7 @@ library IterableAddressDelegateMapping {
     }
 
     function set(Map storage map, address key, DelegateInfo memory val, bool increase) internal {
-        if (map.inserted[key]) {
+        if (map.indexOf[key] != 0) {
             if (increase) {
                 map.values[key].amount += val.amount;
                 map.values[key].earning += val.earning;
@@ -33,32 +32,31 @@ library IterableAddressDelegateMapping {
                 map.values[key].earning -= val.earning;
             }
         } else {
-            map.inserted[key] = true;
             map.values[key] = val;
-            map.indexOf[key] = map.keys.length;
             map.keys.push(key);
+            map.indexOf[key] = map.keys.length;
         }
     }
 
     function remove(Map storage map, address key) internal {
-        if (!map.inserted[key]) {
+        if (map.indexOf[key] == 0) {
             return;
         }
 
-        delete map.inserted[key];
         delete map.values[key];
 
-        uint index = map.indexOf[key];
-        address lastKey = map.keys[map.keys.length - 1];
-
-        map.indexOf[lastKey] = index;
+        // virtual index = keys index + 1
+        uint virtualIndex = map.indexOf[key];
+        if (virtualIndex != map.keys.length) {
+            address lastKey = map.keys[map.keys.length - 1];
+            map.indexOf[lastKey] = virtualIndex;
+            map.keys[virtualIndex - 1] = lastKey;
+        }
         delete map.indexOf[key];
-
-        map.keys[index] = lastKey;
         map.keys.pop();
     }
 
     function exist(Map storage map, address key) view internal returns(bool) {
-        return map.inserted[key];
+        return map.indexOf[key] != 0;
     } 
 }
