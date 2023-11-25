@@ -2,6 +2,8 @@
 pragma solidity 0.8.4;
 
 interface IEarnErrors {
+    error EarnZeroSTCore(address stCORE);
+
     // operator related errors
     error EarnZeroOperator(address operator);
     
@@ -10,8 +12,8 @@ interface IEarnErrors {
     error EarnZeroProtocolFeeReceiver(address protocolFeeReceiver);
 
     // rebalance related errors
-    error EarnReBalancDelegateFailed(address validator, uint256 amount);
-    error EarnReBalancUnDelegateFailed(address validator, uint256 amount);
+    error EarnReBalanceDelegateFailed(address validator, uint256 amount);
+    error EarnReBalanceUnDelegateFailed(address validator, uint256 amount);
 
     // mint related errors
     error EarnZeroValidator(address validator);

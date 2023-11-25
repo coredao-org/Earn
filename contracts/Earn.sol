@@ -14,11 +14,14 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 
+// TODO 1. Proxy 2. NatSpecs
+
 contract Earn is ReentrancyGuard, Ownable, Pausable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
     using Address for address payable;
 
-    // Exchange rate base
+    // Exchange rate base 
+    // 10^6 is used to enhance precision in calculations
     uint256 constant private RATE_BASE = 1000000; 
 
     // Address of system contract: CandidateHub
@@ -30,15 +33,15 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     // Address of stCORE contract: STCORE
     address public STCORE; 
 
-    // Exchange rate (conversion rate) of each round
+    // Exchange rate (conversion rate between stCORE and Core) of each round
     // Exchange rate is calculated and updated at the beginning of each round
     uint256[] public exchangeRates;
 
     // Delegate records on each validator from the Earn contract
     IterableAddressDelegateMapping.Map private validatorDelegateMap;
 
-    // redemption period
-    // It takes 7 days for users to get CORE back from Earn after requesting redeem
+    // Redemption period
+    // It takes {lockDay} days for users to get CORE back from Earn after requesting redeem
     uint256 public lockDay = 7;
     uint256 public constant INIT_DAY_INTERVAL = 86400;
 
@@ -47,7 +50,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     uint256 public uniqueIndex = 1;
     mapping(address => RedeemRecord[]) private redeemRecords;
 
-    // The threshold to tigger rebalance in beforeTurnRound()
+    // The threshold to tigger rebalance
     uint256 public balanceThreshold = 10000 ether;
 
     // Dues protections
@@ -55,21 +58,22 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     uint256 public redeemMinLimit = 1 ether;
     uint256 public pledgeAgentLimit = 1 ether;
 
-    // Protocol fee foints and fee receiver
+    // Protocol fee percents and fee receiving address
     // Set 0 ~ 1000000
-    // 100000 = 10%
+    // 1000000 = 100%
     uint256 public protocolFeePoints = 0;
     address public protocolFeeReceiver;
 
-    // Operate afterRound and rebalance
+    // The operator address to trigger afterTurnRound() and reBalance() methods
     address public operator;
     uint256 public lastOperateRound;
+
+    /// --- EVENTS --- ///
 
     // User operations event
     event Mint(address account, uint256 core, uint256 stCore);
     event Delegate(address validator, uint256 amount);
     event UnDelegate(address validator, uint256);
-    event Transfer(address from, address to, uint256 amount);
     event Redeem(address account, uint256 stCore, uint256 core, uint256 protocolFee);
     event Withdraw(address account, uint256 amount);
 
@@ -88,21 +92,26 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     event UpdateOperator(address caller, address _operator);
 
     constructor(address _stCore, address _protocolFeeReceiver, address _operator) {
-        // protocol fee receiver address protection
+        // stCORE should be none ZERO
+        if (_stCore == address(0)) {
+            revert IEarnErrors.EarnZeroSTCore(_stCore);
+        }
+        STCORE = _stCore;
+
+        // protocol fee address should be none ZERO
         if (_protocolFeeReceiver == address(0)) {
             revert IEarnErrors.EarnZeroProtocolFeeReceiver(_protocolFeeReceiver);
         }
+        protocolFeeReceiver = _protocolFeeReceiver;
 
-        // operator address protection
+        // operator address should be none ZERO
         if (_operator == address(0)) {
             revert IEarnErrors.EarnZeroOperator(_operator);
         }
+        operator = _operator;
 
-        STCORE = _stCore;
         exchangeRates.push(RATE_BASE);
         lastOperateRound = _currentRound();
-        protocolFeeReceiver = _protocolFeeReceiver;
-        operator = _operator;
     }
 
     /// --- MODIFIERS --- ///
@@ -113,7 +122,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     }
 
     modifier afterSettled() {
-        require(lastOperateRound == _currentRound(), "Wait to after round");
+        require(lastOperateRound == _currentRound(), "Turn round not triggered");
         _;
     }
     
@@ -184,9 +193,8 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         // Undelegate CORE from validators
         _unDelegateWithStrategy(core);
 
-        // Calculate protocol fee
+        // Calculate protocol fee and send to receiver address
         uint256 protocolFee = core * protocolFeePoints / RATE_BASE;
-        // Transfer protocolFee to fee receiver
         if (protocolFee != 0) {
             payable(protocolFeeReceiver).sendValue(protocolFee);
         }
@@ -242,23 +250,24 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             }
         }
 
-        // redeem record not found
+        // Redeem record not found
         if (!findRecord) {
             revert IEarnErrors.EarnRedeemRecordNotFound(account, identity);
         }
 
-        // check contract balance
+        // Check contract balance
+        // This shall not happen, just a sanity check
         if (address(this).balance < amount) {
             revert IEarnErrors.EarnInsufficientBalance(address(this).balance, amount);
         }
 
-        // Drop redeem record, and transfer CORE to user
+        // Drop redeem record
         for (uint256 i = index; i < records.length - 1; i++) {
             records[i] = records[i + 1];
         }
         records.pop();
 
-        // transfer balance to user
+        // Transfer CORE to user
         payable(account).sendValue(amount);
 
         emit Withdraw(account, amount);
@@ -293,19 +302,16 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             address key = validatorDelegateMap.getKeyAtIndex(i);
             DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
-            if (delegateInfo.earning > 0) {
-                if(delegateInfo.earning > pledgeAgentLimit) {
-                    uint256 delegateAmount = delegateInfo.earning;
-                    bool success = _delegate(key, delegateAmount);
-                    if (success) {
-                        delegateInfo.amount += delegateAmount;
-                        delegateInfo.earning -= delegateAmount;
-                    } 
+            if(delegateInfo.earning > pledgeAgentLimit) {
+                uint256 delegateAmount = delegateInfo.earning;
+                bool success = _delegate(key, delegateAmount);
+                if (success) {
+                    delegateInfo.amount += delegateAmount;
+                    delegateInfo.earning -= delegateAmount;
                 } 
-            }
+            } 
         }
 
-        // get current round
         uint256 currentRound = _currentRound();
 
         // Update exchange rate
@@ -325,7 +331,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
             }
         }
 
-        // set last operate round to current round tag
+        // Update round tag
         lastOperateRound = currentRound;
     }
 
@@ -366,16 +372,17 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         }
 
         // Transfer CORE to rebalance
+        // User undelegate/delegate instead of transfer to simplify reward calculations
         uint256 transferAmount = (max - min) / 2;
         if (transferAmount >= pledgeAgentLimit && max - transferAmount >= pledgeAgentLimit) {
             bool success = _unDelegate(maxValidator, transferAmount);
             if (!success) {
-                revert IEarnErrors.EarnReBalancUnDelegateFailed(maxValidator, transferAmount);
+                revert IEarnErrors.EarnReBalanceUnDelegateFailed(maxValidator, transferAmount);
             }
 
             success = _delegate(minValidator, transferAmount);
             if (!success) {
-                revert IEarnErrors.EarnReBalancDelegateFailed(minValidator, transferAmount);
+                revert IEarnErrors.EarnReBalanceDelegateFailed(minValidator, transferAmount);
             }
 
             DelegateInfo memory transferInfo = DelegateInfo({
@@ -443,13 +450,12 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         return amount;
     }
 
+    /// --- INTERNAL METHODS --- ///
 
     // Get current round
     function _currentRound() internal view returns (uint256) {
         return ICandidateHub(CANDIDATE_HUB).getRoundTag();
     }
-
-    /// --- INTERNAL METHODS --- ///
 
     // Core to STCore
     function _exchangeSTCore(uint256 core) internal view returns (uint256) {
@@ -539,8 +545,8 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                     } else {
                         // Case 3: the amount available on the validator >= the amount needs to be undelegated AND
                         //          the amount available on the validator <= the amount needs to be undelegated + 1
-                        // In this case we need to make sure there are 1 CORE token left on user side so both 
-                        //   the validator and user are safe on the PledgeAgent dues protection
+                        // In this case we need to make sure there are 1 CORE token left on Earn side so both 
+                        //   the validator and Earn are safe on the PledgeAgent dues protection
                         uint256 delegateAmount = amount - pledgeAgentLimit;
                         uint256 delegatorLeftAmount = delegateInfo.amount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && delegatorLeftAmount > pledgeAgentLimit) {
@@ -574,7 +580,7 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
                         //          the amount available on the validator <= the amount needs to be undelegated
                         // In this case we need to make sure there are 1 CORE token left on validator side so both 
-                        //   the validator and user are safe on the PledgeAgent dues protection
+                        //   the validator and Earn are safe on the PledgeAgent dues protection
                         uint256 delegateAmount = delegateInfo.amount - pledgeAgentLimit;
                         uint256 accountLeftAmount = amount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && accountLeftAmount > pledgeAgentLimit) {
@@ -645,27 +651,6 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
         return success;
     }
 
-    // Transfer delegates between validators
-    function _transfer(address from, address to, uint256 amount) internal {
-        uint256 balanceBefore = address(this).balance;
-        bytes memory callData = abi.encodeWithSignature("transferCoin(address,address,uint256)", from, to, amount);
-        (bool success, ) = PLEDGE_AGENT.call(callData);
-        if (success) {
-            uint256 balanceAfter = address(this).balance;
-            uint256 earning = balanceAfter - balanceBefore;
-            if (earning > 0) {
-                // This shall not happen as all rewards are claimed in afterTurnRound()
-                // Only for unexpected cases
-                DelegateInfo memory unprocessedReward = DelegateInfo({
-                    amount: 0,
-                    earning: earning
-                });
-                validatorDelegateMap.set(from, unprocessedReward, true);
-            }
-            emit Transfer(from, to, amount);
-        }
-    }
-
     function _claim(address validator) internal returns (bool){
         address[] memory addresses = new address[](1);
         addresses[0] = validator;
@@ -714,7 +699,6 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     }
 
     function updateProtocolFeeReveiver(address _protocolFeeReceiver) public onlyOwner {
-        // validator address protection
         if (_protocolFeeReceiver == address(0)) {
             revert IEarnErrors.EarnZeroProtocolFeeReceiver(_protocolFeeReceiver);
         }
