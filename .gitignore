@@ -14,3 +14,10 @@ typechain-types/
 artifacts/
 .deploys/
 .deps/
+build/
+.idea
+# test
+.pytest_cache
+reports/
+test/__pycache__/
+contracts/contracts
