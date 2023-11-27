@@ -8,15 +8,18 @@ import "./interface/ICandidateHub.sol";
 import "./lib/IterableAddressDelegateMapping.sol";
 import "./lib/Structs.sol";
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-// TODO 1. Proxy 2. NatSpecs
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 
-contract Earn is ReentrancyGuard, Ownable, Pausable {
+// TODO 2. NatSpecs
+
+contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable, UUPSUpgradeable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
     using Address for address payable;
 
@@ -89,10 +92,16 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
     event UdpateLockDay(address caller, uint256 lockDay);
     event UpdateProtocolFeePoints(address caller, uint256 protocolFeePoints);
     event UpdateProtocolFeeReveiver(address caller, address protocolFeeReceiver);
-    event UpdateOperator(address caller, address _operator);
+    event UpdateOperator(address caller, address operator);
+    event UpgradeContract(address newImplementation);
 
-    constructor(address _stCore, address _protocolFeeReceiver, address _operator) {
-        // stCORE should be none ZERO
+    function initialize(address _stCore, address _protocolFeeReceiver, address _operator) public initializer {
+        __Ownable_init();
+        __UUPSUpgradeable_init();
+        __ReentrancyGuard_init();
+        __Pausable_init();
+
+         // stCORE should be none ZERO
         if (_stCore == address(0)) {
             revert IEarnErrors.EarnZeroSTCore(_stCore);
         }
@@ -112,6 +121,10 @@ contract Earn is ReentrancyGuard, Ownable, Pausable {
 
         exchangeRates.push(RATE_BASE);
         lastOperateRound = _currentRound();
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal onlyOwner override {
+        emit UpgradeContract(newImplementation);
     }
 
     /// --- MODIFIERS --- ///
