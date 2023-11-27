@@ -41,4 +41,7 @@ interface IEarnErrors {
     error EarnInsufficientBalance(uint256 balance, uint256 amount);
 }
 
+interface ISTCoreErrors {
+    error STCoreZeroEarn(address earns);
+};
 

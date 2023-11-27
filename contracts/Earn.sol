@@ -74,26 +74,26 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     /// --- EVENTS --- ///
 
     // User operations event
-    event Mint(address account, uint256 core, uint256 stCore);
-    event Delegate(address validator, uint256 amount);
-    event UnDelegate(address validator, uint256);
-    event Redeem(address account, uint256 stCore, uint256 core, uint256 protocolFee);
-    event Withdraw(address account, uint256 amount);
+    event Mint(address indexed account, uint256 core, uint256 stCore);
+    event Delegate(address indexed validator, uint256 amount);
+    event UnDelegate(address indexed validator, uint256);
+    event Redeem(address indexed account, uint256 stCore, uint256 core, uint256 protocolFee);
+    event Withdraw(address indexed account, uint256 amount);
 
     // Operator operations event
     event CalculateExchangeRate(uint256 round, uint256 exchangeRate);
-    event ReBalance(address from, address to, uint256 amount);
+    event ReBalance(address indexed from, address indexed to, uint256 amount);
 
     // Admin operations event
-    event UpdateBalanceThreshold(address caller, uint256 balanceThreshold);
-    event UpdateMintMinLimit(address caller, uint256 mintMinLimit);
-    event UpdateRedeemMinLimit(address caller, uint256 redeemMinLimit);
-    event UpdatePledgeAgentLimit(address caller, uint256 pledgeAgentLimit);
-    event UdpateLockDay(address caller, uint256 lockDay);
-    event UpdateProtocolFeePoints(address caller, uint256 protocolFeePoints);
-    event UpdateProtocolFeeReveiver(address caller, address protocolFeeReceiver);
-    event UpdateOperator(address caller, address operator);
-    event UpgradeContract(address newImplementation);
+    event UpdateBalanceThreshold(address indexed caller, uint256 balanceThreshold);
+    event UpdateMintMinLimit(address indexed caller, uint256 mintMinLimit);
+    event UpdateRedeemMinLimit(address indexed caller, uint256 redeemMinLimit);
+    event UpdatePledgeAgentLimit(address indexed caller, uint256 pledgeAgentLimit);
+    event UdpateLockDay(address indexed caller, uint256 lockDay);
+    event UpdateProtocolFeePoints(address indexed caller, uint256 protocolFeePoints);
+    event UpdateProtocolFeeReveiver(address indexed caller, address protocolFeeReceiver);
+    event UpdateOperator(address indexed caller, address operator);
+    event UpgradeContract(address indexed newImplementation);
 
     function initialize(address _stCore, address _protocolFeeReceiver, address _operator) public initializer {
         __Ownable_init();
@@ -699,6 +699,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     function udpateLockDay(uint256 _lockDay) public onlyOwner {
+        if (_lockDay == 0) {
+            revert IEarnErrors.EarnLockDayMustGreaterThanZero();
+        }
         lockDay = _lockDay;
         emit UdpateLockDay(msg.sender, _lockDay);
     }
