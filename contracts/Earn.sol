@@ -297,7 +297,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     //  1. Claim rewards from each validator
     //  2. Stake rewards back to corresponding validators (auto compounding)
     //  3. Update daily exchange rate
-    function afterTurnRound() public onlyOperator {        
+    function afterTurnRound(address emergencyValidator) public onlyOperator {        
         // Records invalid ineffective that need to be removed 
         uint256 deleteSize = 0;
         address[] memory deleteKeys = new address[](validatorDelegateMap.size());
@@ -336,18 +336,28 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Transfer ineffective validator's amount to random validator
         uint256 validatorSize = validatorDelegateMap.size();
         if (validatorSize == 0) {
-            // TODO: Consider how to deal with the failure of all validators ineffective
-            return;
+            if (ICandidateHub(CANDIDATE_HUB).canDelegate(emergencyValidator) && _isActive(emergencyValidator)) {
+                // If all validators ineffective, delegate all amount to emergency validator
+                DelegateInfo memory emergencyDelegateInfo = DelegateInfo({
+                    amount: 0,
+                    earning: unDelegateAmount
+                });
+                validatorDelegateMap.set(emergencyValidator, emergencyDelegateInfo, true);
+                unDelegateAmount = 0;
+            } else {
+                return;
+            }        
+        } else {
+            uint256 randomIndex = _randomIndex(validatorSize);
+            address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
+            // Set unDelegate amount to ramdom validator's earning, and wait to be delegated
+            DelegateInfo memory randomDelegateInfo = DelegateInfo({
+                amount: 0,
+                earning: unDelegateAmount
+            });
+            validatorDelegateMap.set(randomKey, randomDelegateInfo, true);
+            unDelegateAmount = 0;
         }
-        uint256 randomIndex = _randomIndex(validatorSize);
-        address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
-        // Set unDelegate amount to ramdom validator's earning, and wait to be delegated
-        DelegateInfo memory randomDelegateInfo = DelegateInfo({
-            amount: 0,
-            earning: unDelegateAmount
-        });
-        validatorDelegateMap.set(randomKey, randomDelegateInfo, true);
-        unDelegateAmount = 0;
 
         // Delegate rewards
         // Auto compounding
