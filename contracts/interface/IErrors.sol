@@ -6,14 +6,18 @@ interface IEarnErrors {
 
     // operator related errors
     error EarnZeroOperator(address operator);
+    error EarnLockDayMustGreaterThanZero();
     
     // protocol fee related errors
     error EarnProtocolFeePointMoreThanRateBase(uint256 protocolFeePoint);
     error EarnZeroProtocolFeeReceiver(address protocolFeeReceiver);
 
     // rebalance related errors
-    error EarnReBalanceDelegateFailed(address validator, uint256 amount);
-    error EarnReBalanceUnDelegateFailed(address validator, uint256 amount);
+    error EarnReBalanceTransferFailed(address from, address to, uint256 amount);
+    error EarnReBalanceInsufficientAmount(address from, uint256 amount, uint256 transferAmount);
+    error EarnReBalanceInvalidTransferAmount(address from, uint256 amount, uint256 transferAmount);
+    error EarnReBalanceNoNeed(address from, address to);
+    error EarnReBalanceAmountDifferenceLessThanThreshold(address from, address to, uint256 fromAmount, uint256 toAmount, uint256 threshold);
 
     // mint related errors
     error EarnZeroValidator(address validator);
@@ -43,5 +47,5 @@ interface IEarnErrors {
 
 interface ISTCoreErrors {
     error STCoreZeroEarn(address earns);
-};
+}
 

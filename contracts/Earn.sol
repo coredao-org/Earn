@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache2.0
 pragma solidity 0.8.4;
 
-import "./interface/IValidatorSet.sol";
 import {IEarnErrors} from "./interface/IErrors.sol";
 import "./interface/ICandidateHub.sol";
 
@@ -71,14 +70,18 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     address public operator;
     uint256 public lastOperateRound;
 
+    // Amount of undelegate when validator become ineffective
+    uint256 public unDelegateAmount;
+
     /// --- EVENTS --- ///
 
     // User operations event
     event Mint(address indexed account, uint256 core, uint256 stCore);
     event Delegate(address indexed validator, uint256 amount);
-    event UnDelegate(address indexed validator, uint256);
+    event UnDelegate(address indexed validator, uint256 amount);
     event Redeem(address indexed account, uint256 stCore, uint256 core, uint256 protocolFee);
     event Withdraw(address indexed account, uint256 amount);
+    event Transfer(address indexed from, address indexed to, uint256 amount);
 
     // Operator operations event
     event CalculateExchangeRate(uint256 round, uint256 exchangeRate);
@@ -294,7 +297,11 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     //  1. Claim rewards from each validator
     //  2. Stake rewards back to corresponding validators (auto compounding)
     //  3. Update daily exchange rate
-    function afterTurnRound() public onlyOperator {
+    function afterTurnRound() public onlyOperator {        
+        // Records invalid ineffective that need to be removed 
+        uint256 deleteSize = 0;
+        address[] memory deleteKeys = new address[](validatorDelegateMap.size());
+        
         // Claim rewards
         for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
@@ -306,8 +313,40 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                 uint256 balanceAfterClaim = address(this).balance;
                 uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
                 delegateInfo.earning += _earning;
-            } 
+
+                // Find ineffective validator
+                if (!ICandidateHub(CANDIDATE_HUB).canDelegate(key) || !_isActive(key)) {
+                    // UnDelegate from ineffective validator
+                    // If success, record it and wait to be deleted
+                    success = _unDelegate(key, delegateInfo.amount);
+                    if (success) {
+                        unDelegateAmount = delegateInfo.amount + delegateInfo.earning;
+                        deleteKeys[deleteSize] = key;
+                        deleteSize++;
+                    }
+                }
+            }   
         }
+
+        // Remove ineffective validators
+        for (uint256 i = 0; i < deleteSize; i++) {
+            validatorDelegateMap.remove(deleteKeys[i]);
+        }
+
+        // Transfer ineffective validator's amount to random validator
+        uint256 validatorSize = validatorDelegateMap.size();
+        if (validatorSize == 0) {
+            return;
+        }
+        uint256 randomIndex = _randomIndex(validatorSize);
+        address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
+        // Set unDelegate amount to ramdom validator's earning, and wait to be delegated
+        DelegateInfo memory randomDelegateInfo = DelegateInfo({
+            amount: 0,
+            earning: unDelegateAmount
+        });
+        validatorDelegateMap.set(randomKey, randomDelegateInfo, true);
+        unDelegateAmount = 0;
 
         // Delegate rewards
         // Auto compounding
@@ -353,7 +392,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // The Earn contract rebalances staking on top/bottom validators in this method
     function reBalance() public afterSettled onlyOperator{
         if (validatorDelegateMap.size() == 0) {
-            return;
+            revert IEarnErrors.EarnEmptyValidator();
         }
 
         address key = validatorDelegateMap.getKeyAtIndex(0);
@@ -377,36 +416,37 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
 
         if (minValidator == maxValidator) {
-            return;
+            revert IEarnErrors.EarnReBalanceNoNeed(maxValidator, minValidator);
         }
 
         if (max - min < balanceThreshold) {
-            return;
+            revert IEarnErrors.EarnReBalanceAmountDifferenceLessThanThreshold(maxValidator, minValidator, max, min, balanceThreshold);
         }
 
         // Transfer CORE to rebalance
-        // User undelegate/delegate instead of transfer to simplify reward calculations
         uint256 transferAmount = (max - min) / 2;
-        if (transferAmount >= pledgeAgentLimit && max - transferAmount >= pledgeAgentLimit) {
-            bool success = _unDelegate(maxValidator, transferAmount);
-            if (!success) {
-                revert IEarnErrors.EarnReBalanceUnDelegateFailed(maxValidator, transferAmount);
-            }
 
-            success = _delegate(minValidator, transferAmount);
-            if (!success) {
-                revert IEarnErrors.EarnReBalanceDelegateFailed(minValidator, transferAmount);
-            }
+        // Call transfer logic
+        _reBalanceTransfer(maxValidator, minValidator, max, transferAmount);
+    }
 
-            DelegateInfo memory transferInfo = DelegateInfo({
-                amount: transferAmount,
-                earning: 0
-            });
-            validatorDelegateMap.set(maxValidator, transferInfo, false);
-            validatorDelegateMap.set(minValidator, transferInfo, true);
-
-            emit ReBalance(maxValidator, minValidator, transferAmount);
+    function manualBalance(address _from, address _to, uint256 _transferAmount) public afterSettled onlyOperator{
+        if (validatorDelegateMap.size() == 0) {
+            revert IEarnErrors.EarnEmptyValidator();
         }
+
+        DelegateInfo memory fromValidator = validatorDelegateMap.get(_from);
+
+        if (fromValidator.amount < _transferAmount) {
+            revert IEarnErrors.EarnReBalanceInsufficientAmount(_from, fromValidator.amount, _transferAmount);
+        }
+
+        if (!ICandidateHub(CANDIDATE_HUB).canDelegate(_to) || !_isActive(_to)) {
+            revert IEarnErrors.EarnCanNotDelegateValidator(_to);
+        }
+        
+        // Call transfer logic
+        _reBalanceTransfer(_from, _to, fromValidator.amount, _transferAmount);
     }
 
     /// --- VIEW METHODS ---///
@@ -626,20 +666,21 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
              revert IEarnErrors.EarnUnDelegateFailedFinally(msg.sender, amount);
         }
 
+        // TODO: Note remove here
         // Remove empty validator
-        uint256 deleteSize = 0;
-        address[] memory deleteKeys = new address[](validatorDelegateMap.size());
-        for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
-            address key = validatorDelegateMap.getKeyAtIndex(i);
-            DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
-            if (delegateInfo.amount == 0 && delegateInfo.earning == 0) {
-                deleteKeys[deleteSize] = key;
-                deleteSize++;
-            }
-        }
-        for (uint256 i = 0; i < deleteSize; i++) {
-            validatorDelegateMap.remove(deleteKeys[i]);
-        }
+        // uint256 deleteSize = 0;
+        // address[] memory deleteKeys = new address[](validatorDelegateMap.size());
+        // for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
+        //     address key = validatorDelegateMap.getKeyAtIndex(i);
+        //     DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
+        //     if (delegateInfo.amount == 0 && delegateInfo.earning == 0) {
+        //         deleteKeys[deleteSize] = key;
+        //         deleteSize++;
+        //     }
+        // }
+        // for (uint256 i = 0; i < deleteSize; i++) {
+        //     validatorDelegateMap.remove(deleteKeys[i]);
+        // }
     }
 
     // Undelegate from a validator
@@ -664,6 +705,27 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         return success;
     }
 
+    function _transfer(address from, address to, uint256 amount) internal returns(bool) {
+        uint256 balanceBefore = address(this).balance;
+        bytes memory callData = abi.encodeWithSignature("transferCoin(address,address,uint256)", from, to, amount);
+        (bool success, ) = PLEDGE_AGENT.call(callData);
+        if (success) {
+            uint256 balanceAfter = address(this).balance;
+            uint256 earning = balanceAfter - balanceBefore;
+            if (earning > 0) {
+                // This shall not happen as all rewards are claimed in afterTurnRound()
+                // Only for unexpected cases
+                DelegateInfo memory unprocessedReward = DelegateInfo({
+                    amount: 0,
+                    earning: earning
+                });
+                validatorDelegateMap.set(from, unprocessedReward, true);
+            }
+            emit Transfer(from, to, amount);
+        }
+        return success;
+    }
+
     function _claim(address validator) internal returns (bool){
         address[] memory addresses = new address[](1);
         addresses[0] = validator;
@@ -674,6 +736,34 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     function _randomIndex(uint256 length) internal view returns (uint256) {
         return uint256(keccak256(abi.encodePacked(block.timestamp))) % length;
+    }
+
+    function _isActive(address validator) internal view returns (bool) {
+        uint256 index = ICandidateHub(CANDIDATE_HUB).operateMap(validator);
+        if (index == 0) {
+            return false;
+        }
+        Candidate memory candidate = ICandidateHub(CANDIDATE_HUB).candidateSet(index - 1);
+        return candidate.status == 17;
+    }
+
+    function _reBalanceTransfer(address _from, address _to, uint256 _fromAmount, uint256 _transferAmount) internal {
+        if (_transferAmount >= pledgeAgentLimit && (_fromAmount ==_transferAmount ||  _fromAmount - _transferAmount >= pledgeAgentLimit)) {
+            bool success = _transfer(_from, _to, _transferAmount);
+            if (!success) {
+                revert IEarnErrors.EarnReBalanceTransferFailed(_from, _to, _transferAmount);
+            }
+            DelegateInfo memory transferInfo = DelegateInfo({
+                amount: _transferAmount,
+                earning: 0
+            });
+            validatorDelegateMap.set(_from, transferInfo, false);
+            validatorDelegateMap.set(_to, transferInfo, true);
+
+            emit ReBalance(_from, _to, _transferAmount);
+        } else {
+             revert IEarnErrors.EarnReBalanceInvalidTransferAmount(_from, _fromAmount, _transferAmount);
+        }
     }
 
     /// --- ADMIN OPERATIONS --- ///

@@ -33,3 +33,15 @@ struct RedeemRecord {
     // Amount of stCORE
     uint256 stCore;
 }
+
+// Candidate copy from system contract
+struct Candidate {
+    address operateAddr;
+    address consensusAddr;
+    address payable feeAddr;
+    uint256 commissionThousandths;
+    uint256 margin;
+    uint256 status;
+    uint256 commissionLastChangeRound;
+    uint256 commissionLastRoundValue;
+}
