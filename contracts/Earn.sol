@@ -336,6 +336,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Transfer ineffective validator's amount to random validator
         uint256 validatorSize = validatorDelegateMap.size();
         if (validatorSize == 0) {
+            // TODO: Consider how to deal with the failure of all validators ineffective
             return;
         }
         uint256 randomIndex = _randomIndex(validatorSize);
@@ -665,22 +666,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         if (amount > 0) {
              revert IEarnErrors.EarnUnDelegateFailedFinally(msg.sender, amount);
         }
-
-        // TODO: Note remove here
-        // Remove empty validator
-        // uint256 deleteSize = 0;
-        // address[] memory deleteKeys = new address[](validatorDelegateMap.size());
-        // for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
-        //     address key = validatorDelegateMap.getKeyAtIndex(i);
-        //     DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
-        //     if (delegateInfo.amount == 0 && delegateInfo.earning == 0) {
-        //         deleteKeys[deleteSize] = key;
-        //         deleteSize++;
-        //     }
-        // }
-        // for (uint256 i = 0; i < deleteSize; i++) {
-        //     validatorDelegateMap.remove(deleteKeys[i]);
-        // }
     }
 
     // Undelegate from a validator
