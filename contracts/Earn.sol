@@ -70,7 +70,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     address public operator;
     uint256 public lastOperateRound;
 
-    // Amount of undelegate when validator become ineffective
+    // Amount of CORE to undelegate from validators unelected in the new round
     uint256 public unDelegateAmount;
 
     /// --- EVENTS --- ///
@@ -145,6 +145,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     /// --- USER INTERACTIONS --- ///
 
     // Mint stCORE using CORE 
+    // The caller needs to pass in the validator address to delegate to
+    // By doing so we treat existing validators/new comers equally
     function mint(address validator) public payable afterSettled nonReentrant whenNotPaused{
         address account = msg.sender;
         uint256 amount = msg.value;
@@ -245,6 +247,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             revert IEarnErrors.EarnEmptyRedeemRecord();
         }
 
+        // @openissue possible gas issues when iterating a large array
         bool findRecord = false;
         uint256 index = 0;
         uint256 amount = 0;
@@ -297,8 +300,11 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     //  1. Claim rewards from each validator
     //  2. Stake rewards back to corresponding validators (auto compounding)
     //  3. Update daily exchange rate
-    function afterTurnRound(address[] memory emergencyValidators) public onlyOperator {        
-        // Records invalid ineffective that need to be removed 
+    // During the process, this method also moves delegates from inactive validators to newly elected validators
+    // The new elected validators can also be passed in as parameters to play as a back up role -
+    //  in the extreme case where all existing validators are replaced by new ones 
+    function afterTurnRound(address[] memory newElectedValidators) public onlyOperator {        
+        // Validators to undelegate from
         uint256 deleteSize = 0;
         address[] memory deleteKeys = new address[](validatorDelegateMap.size());
         
@@ -314,9 +320,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                 uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
                 delegateInfo.earning += _earning;
 
-                // Find ineffective validator
+                // Check validatos status
                 if (!ICandidateHub(CANDIDATE_HUB).canDelegate(key) || !_isActive(key)) {
-                    // UnDelegate from ineffective validator
+                    // Undelegate from inactive validator
                     // If success, record it and wait to be deleted
                     success = _unDelegate(key, delegateInfo.amount);
                     if (success) {
@@ -328,21 +334,22 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             }   
         }
 
-        // Remove ineffective validators
+        // Remove inactive validators
         for (uint256 i = 0; i < deleteSize; i++) {
             validatorDelegateMap.remove(deleteKeys[i]);
         }
 
-        // Transfer ineffective validator's amount to random validator
+        // Delegate `unDelegateAmount` to a random chosen validator
+        // If all validators staked by Earn in last round become inactive, choose the first validator from parameter
         uint256 validatorSize = validatorDelegateMap.size();
         if (validatorSize == 0) {
-            if (emergencyValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(emergencyValidators[0]) && _isActive(emergencyValidators[0])) {
+            if (newElectedValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(newElectedValidators[0]) && _isActive(newElectedValidators[0])) {
                 // If all validators ineffective, delegate all amount to emergency validator
-                DelegateInfo memory emergencyDelegateInfo = DelegateInfo({
+                DelegateInfo memory backupDelegateInfo = DelegateInfo({
                     amount: 0,
                     earning: unDelegateAmount
                 });
-                validatorDelegateMap.set(emergencyValidators[0], emergencyDelegateInfo, true);
+                validatorDelegateMap.set(newElectedValidators[0], backupDelegateInfo, true);
                 unDelegateAmount = 0;
             } else {
                 return;
@@ -441,7 +448,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         _reBalanceTransfer(maxValidator, minValidator, max, transferAmount);
     }
 
-    function manualBalance(address _from, address _to, uint256 _transferAmount) public afterSettled onlyOperator{
+    // This method is introduce to take necessary actions to improve earning
+    // e.g. to transfer stakes from a jailed validator to another before turn round
+    function manualReBalance(address _from, address _to, uint256 _transferAmount) public afterSettled onlyOperator{
         if (validatorDelegateMap.size() == 0) {
             revert IEarnErrors.EarnEmptyValidator();
         }
