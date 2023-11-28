@@ -297,7 +297,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     //  1. Claim rewards from each validator
     //  2. Stake rewards back to corresponding validators (auto compounding)
     //  3. Update daily exchange rate
-    function afterTurnRound(address emergencyValidator) public onlyOperator {        
+    function afterTurnRound(address[] memory emergencyValidators) public onlyOperator {        
         // Records invalid ineffective that need to be removed 
         uint256 deleteSize = 0;
         address[] memory deleteKeys = new address[](validatorDelegateMap.size());
@@ -336,13 +336,13 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Transfer ineffective validator's amount to random validator
         uint256 validatorSize = validatorDelegateMap.size();
         if (validatorSize == 0) {
-            if (ICandidateHub(CANDIDATE_HUB).canDelegate(emergencyValidator) && _isActive(emergencyValidator)) {
+            if (emergencyValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(emergencyValidators[0]) && _isActive(emergencyValidators[0])) {
                 // If all validators ineffective, delegate all amount to emergency validator
                 DelegateInfo memory emergencyDelegateInfo = DelegateInfo({
                     amount: 0,
                     earning: unDelegateAmount
                 });
-                validatorDelegateMap.set(emergencyValidator, emergencyDelegateInfo, true);
+                validatorDelegateMap.set(emergencyValidators[0], emergencyDelegateInfo, true);
                 unDelegateAmount = 0;
             } else {
                 return;
