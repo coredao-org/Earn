@@ -71,6 +71,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     uint256 public lastOperateRound;
 
     // Amount of CORE to undelegate from validators unelected in the new round
+    // @openissue make it local varible instead of global
     uint256 public unDelegateAmount;
 
     /// --- EVENTS --- ///
@@ -161,7 +162,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             revert IEarnErrors.EarnZeroValidator(validator);
         }
 
-        // check validator can be delegated
+        // check whether validator can be delegated
         if (!ICandidateHub(CANDIDATE_HUB).canDelegate(validator)) {
             revert IEarnErrors.EarnCanNotDelegateValidator(validator);
         }
@@ -237,6 +238,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         address account = msg.sender;
         
         // The ID of the redeem record must not be less than 1 
+        // @openissue `identity == 0` to save gas
         if (identity < 1) {
             revert IEarnErrors.EarnRedeemRecordIdMustGreaterThanZero(account, identity);
         }
@@ -255,6 +257,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             RedeemRecord memory record = records[i];
             if (record.identity == identity) {
                 // Find redeem record
+                // @openissue no need of `!findRecord` check
                 if (!findRecord) {
                     findRecord = true;
                 }
@@ -326,6 +329,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     // If success, record it and wait to be deleted
                     success = _unDelegate(key, delegateInfo.amount);
                     if (success) {
+                        // @openissue `+=` instead of `=` 
                         unDelegateAmount = delegateInfo.amount + delegateInfo.earning;
                         deleteKeys[deleteSize] = key;
                         deleteSize++;
@@ -352,12 +356,13 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                 validatorDelegateMap.set(newElectedValidators[0], backupDelegateInfo, true);
                 unDelegateAmount = 0;
             } else {
+                // should not happen
                 return;
             }        
         } else {
             uint256 randomIndex = _randomIndex(validatorSize);
             address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
-            // Set unDelegate amount to ramdom validator's earning, and wait to be delegated
+            // Set {unDelegateAmount} to a random validator's earning, and wait to be delegated
             DelegateInfo memory randomDelegateInfo = DelegateInfo({
                 amount: 0,
                 earning: unDelegateAmount
@@ -405,7 +410,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         lastOperateRound = currentRound;
     }
 
-    // Triggered right before turn round
+    // This method can be triggered on a regular basis, e.g. hourly/daily/weekly/etc
     // This method cannot revert
     // The Earn contract rebalances staking on top/bottom validators in this method
     function reBalance() public afterSettled onlyOperator{
@@ -450,6 +455,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     // This method is introduce to take necessary actions to improve earning
     // e.g. to transfer stakes from a jailed validator to another before turn round
+    // e.g. to transfer stakes from a low APR validator to a high APR validator
     function manualReBalance(address _from, address _to, uint256 _transferAmount) public afterSettled onlyOperator{
         if (validatorDelegateMap.size() == 0) {
             revert IEarnErrors.EarnEmptyValidator();
