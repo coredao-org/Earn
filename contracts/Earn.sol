@@ -71,7 +71,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     uint256 public lastOperateRound;
 
     // Amount of CORE to undelegate from validators unelected in the new round
-    // @openissue make it local varible instead of global
     uint256 public unDelegateAmount;
 
     /// --- EVENTS --- ///
@@ -238,8 +237,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         address account = msg.sender;
         
         // The ID of the redeem record must not be less than 1 
-        // @openissue `identity == 0` to save gas
-        if (identity < 1) {
+        if (identity == 0) {
             revert IEarnErrors.EarnRedeemRecordIdMustGreaterThanZero(account, identity);
         }
 
@@ -257,10 +255,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             RedeemRecord memory record = records[i];
             if (record.identity == identity) {
                 // Find redeem record
-                // @openissue no need of `!findRecord` check
-                if (!findRecord) {
-                    findRecord = true;
-                }
+                findRecord = true;
                 if (record.unlockTime >= block.timestamp) {
                     // In redemption period, revert
                     revert IEarnErrors.EarnRedeemLocked(account, record.unlockTime, block.timestamp);
@@ -329,8 +324,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     // If success, record it and wait to be deleted
                     success = _unDelegate(key, delegateInfo.amount);
                     if (success) {
-                        // @openissue `+=` instead of `=` 
-                        unDelegateAmount = delegateInfo.amount + delegateInfo.earning;
+                        unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
                         deleteKeys[deleteSize] = key;
                         deleteSize++;
                     }
