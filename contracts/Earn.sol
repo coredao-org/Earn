@@ -71,9 +71,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     address public operator;
     uint256 public lastOperateRound;
 
-    // Amount of CORE to undelegate from validators unelected in the new round
-    uint256 public unDelegateAmount;
-
     /// --- EVENTS --- ///
 
     // User operations event
@@ -236,13 +233,17 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
         // @openissue possible gas issues when iterating a large array
         uint256 amount = 0;
-        for (uint256 i = 0; i < records.length; i++) {
+        for (uint256 i = records.length - 1; i >= 0; i--) {
             RedeemRecord memory record = records[i];
-            if (record.unlockTime < block.timestamp) {
+             if (record.unlockTime < block.timestamp) {
                 amount += record.amount;
-                records[i] = records[records.length - 1];
+                if (i != records.length - 1) {
+                    records[i] = records[records.length - 1];
+                }
                 records.pop();
-                i--;
+            }
+            if (i == 0) {
+                break;
             }
         }
 
@@ -274,40 +275,38 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // During the process, this method also moves delegates from inactive validators to newly elected validators
     // The new elected validators can also be passed in as parameters to play as a back up role -
     //  in the extreme case where all existing validators are replaced by new ones 
-    function afterTurnRound(address[] memory newElectedValidators) public onlyOperator {        
-        // Validators to undelegate from
-        uint256 deleteSize = 0;
-        address[] memory deleteKeys = new address[](validatorDelegateMap.size());
-        
+    function afterTurnRound(address[] memory newElectedValidators) public onlyOperator {
+        // Amount of CORE to undelegate from validators unelected in the new round
+        uint256 unDelegateAmount;
+
         // Claim rewards
-        for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
-            address key = validatorDelegateMap.getKeyAtIndex(i);
-            DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
+        if (validatorDelegateMap.size() != 0) {
+            for (uint i = validatorDelegateMap.size() - 1; i <= 0; i--) {
+                address key = validatorDelegateMap.getKeyAtIndex(i);
+                DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
-            uint256 balanceBeforeClaim = address(this).balance;
-            bool success = _claim(key);
-            if (success) {
-                uint256 balanceAfterClaim = address(this).balance;
-                uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
-                delegateInfo.earning += _earning;
+                uint256 balanceBeforeClaim = address(this).balance;
+                bool success = _claim(key);
+                if (success) {
+                    uint256 balanceAfterClaim = address(this).balance;
+                    uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
+                    delegateInfo.earning += _earning;
 
-                // Check validatos status
-                if (!_isActive(key)) {
-                    // Undelegate from inactive validator
-                    // If success, record it and wait to be deleted
-                    success = _unDelegate(key, delegateInfo.amount);
-                    if (success) {
-                        unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
-                        deleteKeys[deleteSize] = key;
-                        deleteSize++;
+                    // Check validatos status
+                    if (!_isActive(key)) {
+                        // Undelegate from inactive validator
+                        // If success, record it and wait to be deleted
+                        success = _unDelegate(key, delegateInfo.amount);
+                        if (success) {
+                            unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
+                            validatorDelegateMap.remove(key);
+                        }
                     }
                 }
-            }   
-        }
-
-        // Remove inactive validators
-        for (uint256 i = 0; i < deleteSize; i++) {
-            validatorDelegateMap.remove(deleteKeys[i]);
+                if (i == 0) {
+                    break;
+                }
+            }
         }
 
         // Delegate `unDelegateAmount` to a random chosen validator
@@ -321,10 +320,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     earning: unDelegateAmount
                 });
                 validatorDelegateMap.set(newElectedValidators[0], backupDelegateInfo, true);
-                unDelegateAmount = 0;
             } else {
                 // should not happen
-                return;
+                revert IEarnErrors.EarnValidatorsAllOffline();
             }        
         } else {
             uint256 randomIndex = _randomIndex(validatorSize);
@@ -335,7 +333,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                 earning: unDelegateAmount
             });
             validatorDelegateMap.set(randomKey, randomDelegateInfo, true);
-            unDelegateAmount = 0;
         }
 
         // Delegate rewards
@@ -347,10 +344,11 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             if(delegateInfo.earning > pledgeAgentLimit) {
                 uint256 delegateAmount = delegateInfo.earning;
                 bool success = _delegate(key, delegateAmount);
-                if (success) {
-                    delegateInfo.amount += delegateAmount;
-                    delegateInfo.earning -= delegateAmount;
-                } 
+                if (!success) {
+                    revert IEarnErrors.EarnAfterTurnRoundDelegateFailed(key, delegateAmount);
+                }
+                delegateInfo.amount += delegateAmount;
+                delegateInfo.earning -= delegateAmount;
             } 
         }
 

@@ -40,6 +40,10 @@ interface IEarnErrors {
     error EarnEmptyRedeemRecord();
     error EarnRedeemRecordNotFound(address account);
     error EarnInsufficientBalance(uint256 balance, uint256 amount);
+
+    // after turn round related errors
+    error EarnValidatorsAllOffline();
+    error EarnAfterTurnRoundDelegateFailed(address validator, uint256 amount);
 }
 
 interface ISTCoreErrors {
