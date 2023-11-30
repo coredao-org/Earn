@@ -21,7 +21,6 @@ interface IEarnErrors {
 
     // mint related errors
     error EarnZeroValidator(address validator);
-    error EarnCanNotDelegateValidator(address validator);
     error EarnMintAmountTooSmall(address account, uint256 amount);
     error EarnDelegateFailedWhileMint(address account, address validator, uint256 amount);
     error EarnCallStCoreMintFailed(address account, uint256 amount, uint256 stCore);

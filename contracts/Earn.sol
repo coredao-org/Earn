@@ -24,13 +24,16 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     // Exchange rate base 
     // 10^6 is used to enhance precision in calculations
-    uint256 constant private RATE_BASE = 1000000; 
+    uint256 private constant RATE_BASE = 1000000;
 
     // Address of system contract: CandidateHub
-    address constant private CANDIDATE_HUB = 0x0000000000000000000000000000000000001005; 
+    address private constant CANDIDATE_HUB = 0x0000000000000000000000000000000000001005;
 
     // Address of system contract: PledgeAgent
-    address constant private PLEDGE_AGENT = payable(0x0000000000000000000000000000000000001007);
+    address private constant PLEDGE_AGENT = payable(0x0000000000000000000000000000000000001007);
+
+    // The number of seconds in a day
+    uint256 public constant DAY_INTERVAL = 86400;
 
     // Address of stCORE contract: STCORE
     address public STCORE; 
@@ -45,12 +48,11 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // Redemption period
     // It takes {lockDay} days for users to get CORE back from Earn after requesting redeem
     uint256 public lockDay = 7;
-    uint256 public constant INIT_DAY_INTERVAL = 86400;
 
     // Redeem records are saved for each user
     // The records been withdrawn are removed to improve iteration performance
     uint256 public uniqueIndex = 1;
-    mapping(address => RedeemRecord[]) private redeemRecords;
+    mapping(address => RedeemRecord[]) public redeemRecords;
 
     // The threshold to tigger rebalance
     uint256 public balanceThreshold = 10000 ether;
@@ -96,7 +98,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     event UpdateProtocolFeePoints(address indexed caller, uint256 protocolFeePoints);
     event UpdateProtocolFeeReveiver(address indexed caller, address protocolFeeReceiver);
     event UpdateOperator(address indexed caller, address operator);
-    event UpgradeContract(address indexed newImplementation);
 
     function initialize(address _stCore, address _protocolFeeReceiver, address _operator) public initializer {
         __Ownable_init();
@@ -126,9 +127,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         lastOperateRound = _currentRound();
     }
 
-    function _authorizeUpgrade(address newImplementation) internal onlyOwner override {
-        emit UpgradeContract(newImplementation);
-    }
+    function _authorizeUpgrade(address newImplementation) internal onlyOwner override {}
 
     /// --- MODIFIERS --- ///
 
@@ -141,13 +140,18 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         require(lastOperateRound == _currentRound(), "Turn round not triggered");
         _;
     }
+
+    modifier canDelegate(address _validator) {
+        require (ICandidateHub(CANDIDATE_HUB).canDelegate(_validator), "Invalid candidate");
+        _;
+    }
     
     /// --- USER INTERACTIONS --- ///
 
     // Mint stCORE using CORE 
     // The caller needs to pass in the validator address to delegate to
     // By doing so we treat existing validators/new comers equally
-    function mint(address validator) public payable afterSettled nonReentrant whenNotPaused{
+    function mint(address _validator) public payable afterSettled nonReentrant whenNotPaused canDelegate(_validator) {
         address account = msg.sender;
         uint256 amount = msg.value;
 
@@ -156,20 +160,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             revert IEarnErrors.EarnMintAmountTooSmall(account, amount);
         }
 
-        // validator address protection
-        if (validator == address(0)) {
-            revert IEarnErrors.EarnZeroValidator(validator);
-        }
-
-        // check whether validator can be delegated
-        if (!ICandidateHub(CANDIDATE_HUB).canDelegate(validator)) {
-            revert IEarnErrors.EarnCanNotDelegateValidator(validator);
-        }
-
         // Delegate CORE to PledgeAgent
-        bool success = _delegate(validator, amount);
+        bool success = _delegate(_validator, amount);
         if (!success) {
-            revert IEarnErrors.EarnDelegateFailedWhileMint(account, validator,amount);
+            revert IEarnErrors.EarnDelegateFailedWhileMint(account, _validator,amount);
         }
 
         // Update local records
@@ -177,7 +171,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             amount: amount,
             earning: 0
         });
-        validatorDelegateMap.set(validator, delegateInfo, true);
+        validatorDelegateMap.set(_validator, delegateInfo, true);
 
         // Mint stCORE and send to users
         uint256 stCore = _exchangeSTCore(amount);
@@ -222,7 +216,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         RedeemRecord memory redeemRecord = RedeemRecord({
             identity : uniqueIndex++,
             redeemTime: block.timestamp,
-            unlockTime: block.timestamp + INIT_DAY_INTERVAL * lockDay,
+            unlockTime: block.timestamp + DAY_INTERVAL * lockDay,
             amount: redeemAmount,
             stCore: stCore
         });
@@ -319,7 +313,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                 delegateInfo.earning += _earning;
 
                 // Check validatos status
-                if (!ICandidateHub(CANDIDATE_HUB).canDelegate(key) || !_isActive(key)) {
+                if (!_isActive(key)) {
                     // Undelegate from inactive validator
                     // If success, record it and wait to be deleted
                     success = _unDelegate(key, delegateInfo.amount);
@@ -341,7 +335,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // If all validators staked by Earn in last round become inactive, choose the first validator from parameter
         uint256 validatorSize = validatorDelegateMap.size();
         if (validatorSize == 0) {
-            if (newElectedValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(newElectedValidators[0]) && _isActive(newElectedValidators[0])) {
+            if (newElectedValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(newElectedValidators[0])) {
                 // If all validators ineffective, delegate all amount to emergency validator
                 DelegateInfo memory backupDelegateInfo = DelegateInfo({
                     amount: 0,
@@ -450,7 +444,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // This method is introduce to take necessary actions to improve earning
     // e.g. to transfer stakes from a jailed validator to another before turn round
     // e.g. to transfer stakes from a low APR validator to a high APR validator
-    function manualReBalance(address _from, address _to, uint256 _transferAmount) public afterSettled onlyOperator{
+    function manualReBalance(address _from, address _to, uint256 _transferAmount) public afterSettled onlyOperator canDelegate(_to){
         if (validatorDelegateMap.size() == 0) {
             revert IEarnErrors.EarnEmptyValidator();
         }
@@ -459,10 +453,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
         if (fromValidator.amount < _transferAmount) {
             revert IEarnErrors.EarnReBalanceInsufficientAmount(_from, fromValidator.amount, _transferAmount);
-        }
-
-        if (!ICandidateHub(CANDIDATE_HUB).canDelegate(_to) || !_isActive(_to)) {
-            revert IEarnErrors.EarnCanNotDelegateValidator(_to);
         }
         
         // Call transfer logic

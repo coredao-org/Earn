@@ -45,12 +45,11 @@ library IterableAddressDelegateMapping {
 
         delete map.values[key];
 
-        // virtual index = keys index + 1
-        uint virtualIndex = map.indexOf[key];
-        if (virtualIndex != map.keys.length) {
+        uint indexPlus1 = map.indexOf[key];
+        if (indexPlus1 != map.keys.length) {
             address lastKey = map.keys[map.keys.length - 1];
-            map.indexOf[lastKey] = virtualIndex;
-            map.keys[virtualIndex - 1] = lastKey;
+            map.indexOf[lastKey] = indexPlus1;
+            map.keys[indexPlus1 - 1] = lastKey;
         }
         delete map.indexOf[key];
         map.keys.pop();
