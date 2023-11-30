@@ -233,17 +233,14 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
         // @openissue possible gas issues when iterating a large array
         uint256 amount = 0;
-        for (uint256 i = records.length - 1; i >= 0; i--) {
-            RedeemRecord memory record = records[i];
+        for (uint256 i = records.length; i != 0; i--) {
+            RedeemRecord memory record = records[i - 1];
              if (record.unlockTime < block.timestamp) {
                 amount += record.amount;
-                if (i != records.length - 1) {
-                    records[i] = records[records.length - 1];
+                if (i != records.length) {
+                    records[i - 1] = records[records.length - 1];
                 }
                 records.pop();
-            }
-            if (i == 0) {
-                break;
             }
         }
 
@@ -280,31 +277,26 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         uint256 unDelegateAmount;
 
         // Claim rewards
-        if (validatorDelegateMap.size() != 0) {
-            for (uint i = validatorDelegateMap.size() - 1; i <= 0; i--) {
-                address key = validatorDelegateMap.getKeyAtIndex(i);
-                DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
+        for (uint i = validatorDelegateMap.size(); i != 0; i--) {
+            address key = validatorDelegateMap.getKeyAtIndex(i - 1);
+            DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
-                uint256 balanceBeforeClaim = address(this).balance;
-                bool success = _claim(key);
-                if (success) {
-                    uint256 balanceAfterClaim = address(this).balance;
-                    uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
-                    delegateInfo.earning += _earning;
+            uint256 balanceBeforeClaim = address(this).balance;
+            bool success = _claim(key);
+            if (success) {
+                uint256 balanceAfterClaim = address(this).balance;
+                uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
+                delegateInfo.earning += _earning;
 
-                    // Check validatos status
-                    if (!_isActive(key)) {
-                        // Undelegate from inactive validator
-                        // If success, record it and wait to be deleted
-                        success = _unDelegate(key, delegateInfo.amount);
-                        if (success) {
-                            unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
-                            validatorDelegateMap.remove(key);
-                        }
+                // Check validatos status
+                if (!_isActive(key)) {
+                    // Undelegate from inactive validator
+                    // If success, record it and wait to be deleted
+                    success = _unDelegate(key, delegateInfo.amount);
+                    if (success) {
+                        unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
+                        validatorDelegateMap.remove(key);
                     }
-                }
-                if (i == 0) {
-                    break;
                 }
             }
         }
