@@ -51,7 +51,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     // Redeem records are saved for each user
     // The records been withdrawn are removed to improve iteration performance
-    uint256 public uniqueIndex = 1;
     mapping(address => RedeemRecord[]) public redeemRecords;
 
     // The threshold to tigger rebalance
@@ -214,7 +213,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Update local records
         uint256 redeemAmount = core - protocolFee;
         RedeemRecord memory redeemRecord = RedeemRecord({
-            identity : uniqueIndex++,
             redeemTime: block.timestamp,
             unlockTime: block.timestamp + DAY_INTERVAL * lockDay,
             amount: redeemAmount,
@@ -227,14 +225,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     // Withdraw/claim CORE tokens after redemption period
-    function withdraw(uint256 identity) public afterSettled nonReentrant whenNotPaused{
+    function withdraw() public afterSettled nonReentrant whenNotPaused{
         address account = msg.sender;
         
-        // The ID of the redeem record must not be less than 1 
-        if (identity == 0) {
-            revert IEarnErrors.EarnRedeemRecordIdMustGreaterThanZero(account, identity);
-        }
-
         // Find user redeem records
         RedeemRecord[] storage records = redeemRecords[account];
         if (records.length == 0) {
@@ -242,28 +235,20 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
 
         // @openissue possible gas issues when iterating a large array
-        bool findRecord = false;
-        uint256 index = 0;
         uint256 amount = 0;
         for (uint256 i = 0; i < records.length; i++) {
             RedeemRecord memory record = records[i];
-            if (record.identity == identity) {
-                // Find redeem record
-                findRecord = true;
-                if (record.unlockTime >= block.timestamp) {
-                    // In redemption period, revert
-                    revert IEarnErrors.EarnRedeemLocked(account, record.unlockTime, block.timestamp);
-                }
-                // Passed redemption period, eligible to withdraw
-                index = i;
-                amount = record.amount;
-                break;
+            if (record.unlockTime < block.timestamp) {
+                amount += record.amount;
+                records[i] = records[records.length - 1];
+                records.pop();
+                i--;
             }
         }
 
-        // Redeem record not found
-        if (!findRecord) {
-            revert IEarnErrors.EarnRedeemRecordNotFound(account, identity);
+        // Check redeem records exist
+        if (amount == 0) {
+            revert IEarnErrors.EarnRedeemRecordNotFound(account);
         }
 
         // Check contract balance
@@ -271,12 +256,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         if (address(this).balance < amount) {
             revert IEarnErrors.EarnInsufficientBalance(address(this).balance, amount);
         }
-
-        // Drop redeem record
-        for (uint256 i = index; i < records.length - 1; i++) {
-            records[i] = records[i + 1];
-        }
-        records.pop();
 
         // Transfer CORE to user
         payable(account).sendValue(amount);

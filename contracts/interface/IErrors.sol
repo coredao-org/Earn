@@ -37,10 +37,8 @@ interface IEarnErrors {
     error EarnEmptyValidator();
 
     // withdraw related errors
-    error EarnRedeemRecordIdMustGreaterThanZero(address account, uint256 id);
     error EarnEmptyRedeemRecord();
-    error EarnRedeemRecordNotFound(address account, uint256 id);
-    error EarnRedeemLocked(address account, uint256 unlockTime, uint256 blockTime);
+    error EarnRedeemRecordNotFound(address account);
     error EarnInsufficientBalance(uint256 balance, uint256 amount);
 }
 
