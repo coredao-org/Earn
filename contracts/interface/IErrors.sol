@@ -7,6 +7,12 @@ interface IEarnErrors {
     // operator related errors
     error EarnZeroOperator(address operator);
     error EarnLockDayMustGreaterThanZero();
+    error EarnBalanceThresholdMustGreaterThanZero();
+    error EarnMintMinLimitMustGreaterThan1Core();
+    error EarnRedeemMinLimitMustGreaterThan1Core();
+    error EarnPledgeAgentLimitMustGreaterThan1Core();
+    error EarnRedeemCountLimitMustGreaterThanZero();
+    error EarnExchangeRateQueryLimitMustGreaterThanZero();
     
     // protocol fee related errors
     error EarnProtocolFeePointMoreThanRateBase(uint256 protocolFeePoint);
@@ -35,6 +41,7 @@ interface IEarnErrors {
     error EarnUnDelegateFailedCase5(address validator, uint256 amount);
     error EarnUnDelegateFailedFinally(address validator, uint256 amount);
     error EarnEmptyValidator();
+    error EarnRdeemCountOverLimit(address account, uint256 redeemCount, uint256 limit);
 
     // withdraw related errors
     error EarnEmptyRedeemRecord();

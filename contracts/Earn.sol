@@ -35,6 +35,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // The number of seconds in a day
     uint256 public constant DAY_INTERVAL = 86400;
 
+    uint256 public constant VALIDATOR_ACTIVE_STATUS = 17;
+
     // Address of stCORE contract: STCORE
     address public STCORE; 
 
@@ -71,6 +73,12 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     address public operator;
     uint256 public lastOperateRound;
 
+    // Length limit of RedeemRecord[]
+    uint256 public redeemCountLimit  = 100;
+
+    // Query count limit of exchangeRates
+    uint256 public exchangeRateQueryLimit = 365;
+
     /// --- EVENTS --- ///
 
     // User operations event
@@ -94,8 +102,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     event UpdateProtocolFeePoints(address indexed caller, uint256 protocolFeePoints);
     event UpdateProtocolFeeReveiver(address indexed caller, address protocolFeeReceiver);
     event UpdateOperator(address indexed caller, address operator);
+    event UpdateRedeemCountLimit(address indexed caller, uint256 redeemCountLimit);
+    event UpdateExchangeRateQueryLimit(address indexed caller, uint256 exchangeRateQueryLimit);
 
-    function initialize(address _stCore, address _protocolFeeReceiver, address _operator) public initializer {
+    function initialize(address _stCore, address _protocolFeeReceiver, address _operator) external initializer {
         __Ownable_init();
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
@@ -147,7 +157,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // Mint stCORE using CORE 
     // The caller needs to pass in the validator address to delegate to
     // By doing so we treat existing validators/new comers equally
-    function mint(address _validator) public payable afterSettled nonReentrant whenNotPaused canDelegate(_validator) {
+    function mint(address _validator) external payable afterSettled nonReentrant whenNotPaused canDelegate(_validator) {
         address account = msg.sender;
         uint256 amount = msg.value;
 
@@ -167,7 +177,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             amount: amount,
             earning: 0
         });
-        validatorDelegateMap.set(_validator, delegateInfo, true);
+        validatorDelegateMap.add(_validator, delegateInfo);
 
         // Mint stCORE and send to users
         uint256 stCore = _exchangeSTCore(amount);
@@ -181,8 +191,13 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     // Redeem stCORE to get back CORE
-    function redeem(uint256 stCore) public afterSettled nonReentrant whenNotPaused{
-         address account = msg.sender;
+    function redeem(uint256 stCore) external afterSettled nonReentrant whenNotPaused{
+        address account = msg.sender;
+        RedeemRecord[] storage records = redeemRecords[account];
+        
+        if (records.length >= redeemCountLimit) {
+            revert IEarnErrors.EarnRdeemCountOverLimit(account, records.length, redeemCountLimit);
+        }
 
         // Dues protection
         if (stCore < redeemMinLimit) {
@@ -215,14 +230,13 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             amount: redeemAmount,
             stCore: stCore
         });
-        RedeemRecord[] storage records = redeemRecords[account];
         records.push(redeemRecord);
 
         emit Redeem(account, stCore, redeemAmount, protocolFee);
     }
 
     // Withdraw/claim CORE tokens after redemption period
-    function withdraw() public afterSettled nonReentrant whenNotPaused{
+    function withdraw() external afterSettled nonReentrant whenNotPaused{
         address account = msg.sender;
         
         // Find user redeem records
@@ -272,7 +286,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // During the process, this method also moves delegates from inactive validators to newly elected validators
     // The new elected validators can also be passed in as parameters to play as a back up role -
     //  in the extreme case where all existing validators are replaced by new ones 
-    function afterTurnRound(address[] memory newElectedValidators) public onlyOperator {
+    function afterTurnRound(address[] memory newElectedValidators) external onlyOperator {
         // Amount of CORE to undelegate from validators unelected in the new round
         uint256 unDelegateAmount;
 
@@ -311,7 +325,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     amount: 0,
                     earning: unDelegateAmount
                 });
-                validatorDelegateMap.set(newElectedValidators[0], backupDelegateInfo, true);
+                validatorDelegateMap.add(newElectedValidators[0], backupDelegateInfo);
             } else {
                 // should not happen
                 revert IEarnErrors.EarnValidatorsAllOffline();
@@ -324,7 +338,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                 amount: 0,
                 earning: unDelegateAmount
             });
-            validatorDelegateMap.set(randomKey, randomDelegateInfo, true);
+            validatorDelegateMap.add(randomKey, randomDelegateInfo);
         }
 
         // Delegate rewards
@@ -370,8 +384,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // This method can be triggered on a regular basis, e.g. hourly/daily/weekly/etc
     // This method cannot revert
     // The Earn contract rebalances staking on top/bottom validators in this method
-    function reBalance() public afterSettled onlyOperator{
-        if (validatorDelegateMap.size() == 0) {
+    function reBalance() external afterSettled onlyOperator{
+        if (validatorDelegateMap.size() <= 1) {
             revert IEarnErrors.EarnEmptyValidator();
         }
 
@@ -413,7 +427,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // This method is introduce to take necessary actions to improve earning
     // e.g. to transfer stakes from a jailed validator to another before turn round
     // e.g. to transfer stakes from a low APR validator to a high APR validator
-    function manualReBalance(address _from, address _to, uint256 _transferAmount) public afterSettled onlyOperator canDelegate(_to){
+    function manualReBalance(address _from, address _to, uint256 _transferAmount) external afterSettled onlyOperator canDelegate(_to){
         if (validatorDelegateMap.size() == 0) {
             revert IEarnErrors.EarnEmptyValidator();
         }
@@ -429,11 +443,11 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     /// --- VIEW METHODS ---///
-    function getRedeemRecords() public view returns (RedeemRecord[] memory) {
+    function getRedeemRecords() external view returns (RedeemRecord[] memory) {
         return redeemRecords[msg.sender];
     }
 
-    function getRedeemAmount() public view returns (uint256 unlockedAmount, uint256 lockedAmount) {
+    function getRedeemAmount() external view returns (uint256 unlockedAmount, uint256 lockedAmount) {
         RedeemRecord[] storage records = redeemRecords[msg.sender];
         for (uint256 i = 0; i < records.length; i++) {
             RedeemRecord memory record = records[i];
@@ -445,8 +459,13 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
     }
 
-    function getExchangeRates(uint256 target) public view returns(uint256[] memory _exchangeRates) {
-         if (target < 1) {
+    function getExchangeRates(uint256 target) external view returns(uint256[] memory _exchangeRates) {
+        // If target greater than query limit, return empty
+        if (target > exchangeRateQueryLimit) {
+            return _exchangeRates;
+        }
+
+        if (target < 1) {
             return _exchangeRates;
         }
 
@@ -464,17 +483,16 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         for (uint256 i = from; i < size; i++) {
             _exchangeRates[i-from] = exchangeRates[i];
         }
-
-        return _exchangeRates;
     }
 
-    function getCurrentExchangeRate() public view  returns (uint256) {
+    function getCurrentExchangeRate() external view  returns (uint256) {
         return exchangeRates[exchangeRates.length - 1];
     } 
 
-    function getTotalDelegateAmount() public view returns (uint256) {
+    function getTotalDelegateAmount() external view returns (uint256) {
         uint256 amount = 0;
-        for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
+        uint256 mapSize = validatorDelegateMap.size();
+        for (uint256 i = 0; i < mapSize; i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
             DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
             amount += delegateInfo.amount;
@@ -485,22 +503,22 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     /// --- INTERNAL METHODS --- ///
 
     // Get current round
-    function _currentRound() internal view returns (uint256) {
+    function _currentRound() private view returns (uint256) {
         return ICandidateHub(CANDIDATE_HUB).getRoundTag();
     }
 
     // Core to STCore
-    function _exchangeSTCore(uint256 core) internal view returns (uint256) {
+    function _exchangeSTCore(uint256 core) private view returns (uint256) {
         return core * RATE_BASE / exchangeRates[exchangeRates.length-1];
     }
 
     // STCore to Core
-    function _exchangeCore(uint256 stCore) internal view returns(uint256) {
+    function _exchangeCore(uint256 stCore) private view returns(uint256) {
         return stCore * exchangeRates[exchangeRates.length-1] / RATE_BASE;
     }
 
     // Delegate to validator
-    function _delegate(address validator, uint256 amount) internal returns (bool) {
+    function _delegate(address validator, uint256 amount) private returns (bool) {
         uint256 balanceBefore = address(this).balance - amount;
         bytes memory callData = abi.encodeWithSignature("delegateCoin(address)", validator);
         (bool success, ) = PLEDGE_AGENT.call{value: amount}(callData);
@@ -514,7 +532,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     amount: 0,
                     earning: earning
                 });
-                validatorDelegateMap.set(validator, unprocessedReward, true);
+                validatorDelegateMap.add(validator, unprocessedReward);
             }
             emit Delegate(validator, amount);
         }
@@ -530,7 +548,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     //  1. The validator must be cleared or have 1+ CORE remaining after undelegate AND
     //  2. Earn contract must have 0 or 1+ CORE on any validator after undelegate
     // Otherwise, Earn might fail to undelegate further because of the dues protection from PledgeAgent
-    function _unDelegateWithStrategy(uint256 amount) internal {
+    function _unDelegateWithStrategy(uint256 amount) private {
         // Random validator position
         uint256 length = validatorDelegateMap.size();
         if (length == 0) {
@@ -557,7 +575,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         revert IEarnErrors.EarnUnDelegateFailedCase1(msg.sender, amount);
                     }
                     amount = 0;
-                    validatorDelegateMap.set(key, unDelegateInfo, false);
+                    validatorDelegateMap.substract(key, unDelegateInfo);
                     break;
                 } else if (delegateInfo.amount > amount) {
                     if (delegateInfo.amount >= amount + pledgeAgentLimit) {
@@ -572,7 +590,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                             revert IEarnErrors.EarnUnDelegateFailedCase2(msg.sender, amount);
                         }
                         amount = 0;
-                        validatorDelegateMap.set(key, unDelegateInfo, false);
+                        validatorDelegateMap.substract(key, unDelegateInfo);
                         break;
                     } else {
                         // Case 3: the amount available on the validator >= the amount needs to be undelegated AND
@@ -591,7 +609,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                                 revert IEarnErrors.EarnUnDelegateFailedCase3(msg.sender, amount);
                             }
                             amount -= delegateAmount; // amount equals to 1 ether
-                            validatorDelegateMap.set(key, unDelegateInfo, false);
+                            validatorDelegateMap.substract(key, unDelegateInfo);
                         }
                     }
                 } else {
@@ -607,7 +625,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                             revert IEarnErrors.EarnUnDelegateFailedCase4(msg.sender, amount);
                         }
                         amount -= delegateInfo.amount;
-                        validatorDelegateMap.set(key, unDelegateInfo, false);
+                        validatorDelegateMap.substract(key, unDelegateInfo);
                     } else {
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
                         //          the amount available on the validator <= the amount needs to be undelegated
@@ -625,7 +643,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                                 revert IEarnErrors.EarnUnDelegateFailedCase5(msg.sender, amount);
                             }
                             amount -= delegateAmount;
-                            validatorDelegateMap.set(key, unDelegateInfo, false);
+                            validatorDelegateMap.substract(key, unDelegateInfo);
                         }
                     }
                 }
@@ -647,7 +665,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     // Undelegate from a validator
-    function _unDelegate(address validator, uint256 amount) internal returns (bool) {
+    function _unDelegate(address validator, uint256 amount) private returns (bool) {
         uint256 balanceBefore = address(this).balance;
         bytes memory callData = abi.encodeWithSignature("undelegateCoin(address,uint256)", validator, amount);
         (bool success, ) = PLEDGE_AGENT.call(callData);
@@ -661,14 +679,14 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     amount: 0,
                     earning: earning
                 });
-                validatorDelegateMap.set(validator, unprocessedReward, true);
+                validatorDelegateMap.add(validator, unprocessedReward);
             }
             emit UnDelegate(validator, amount);
         }
         return success;
     }
 
-    function _transfer(address from, address to, uint256 amount) internal returns(bool) {
+    function _transfer(address from, address to, uint256 amount) private returns(bool) {
         uint256 balanceBefore = address(this).balance;
         bytes memory callData = abi.encodeWithSignature("transferCoin(address,address,uint256)", from, to, amount);
         (bool success, ) = PLEDGE_AGENT.call(callData);
@@ -682,14 +700,14 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     amount: 0,
                     earning: earning
                 });
-                validatorDelegateMap.set(from, unprocessedReward, true);
+                validatorDelegateMap.add(from, unprocessedReward);
             }
             emit Transfer(from, to, amount);
         }
         return success;
     }
 
-    function _claim(address validator) internal returns (bool){
+    function _claim(address validator) private returns (bool){
         address[] memory addresses = new address[](1);
         addresses[0] = validator;
         bytes memory callData = abi.encodeWithSignature("claimReward(address[])", addresses);
@@ -697,20 +715,20 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         return success;
     }
 
-    function _randomIndex(uint256 length) internal view returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(block.timestamp))) % length;
+    function _randomIndex(uint256 length) private view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.timestamp, block.difficulty, msg.sender))) % length;
     }
 
-    function _isActive(address validator) internal view returns (bool) {
-        uint256 index = ICandidateHub(CANDIDATE_HUB).operateMap(validator);
-        if (index == 0) {
+    function _isActive(address validator) private view returns (bool) {
+        uint256 indexPlus1 = ICandidateHub(CANDIDATE_HUB).operateMap(validator);
+        if (indexPlus1 == 0) {
             return false;
         }
-        Candidate memory candidate = ICandidateHub(CANDIDATE_HUB).candidateSet(index - 1);
-        return candidate.status == 17;
+        Candidate memory candidate = ICandidateHub(CANDIDATE_HUB).candidateSet(indexPlus1 - 1);
+        return candidate.status == VALIDATOR_ACTIVE_STATUS;
     }
 
-    function _reBalanceTransfer(address _from, address _to, uint256 _fromAmount, uint256 _transferAmount) internal {
+    function _reBalanceTransfer(address _from, address _to, uint256 _fromAmount, uint256 _transferAmount) private {
         if (_transferAmount >= pledgeAgentLimit && (_fromAmount ==_transferAmount ||  _fromAmount - _transferAmount >= pledgeAgentLimit)) {
             bool success = _transfer(_from, _to, _transferAmount);
             if (!success) {
@@ -720,8 +738,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                 amount: _transferAmount,
                 earning: 0
             });
-            validatorDelegateMap.set(_from, transferInfo, false);
-            validatorDelegateMap.set(_to, transferInfo, true);
+            validatorDelegateMap.substract(_from, transferInfo);
+            validatorDelegateMap.add(_to, transferInfo);
 
             emit ReBalance(_from, _to, _transferAmount);
         } else {
@@ -731,27 +749,39 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     /// --- ADMIN OPERATIONS --- ///
 
-    function updateBalanceThreshold(uint256 _balanceThreshold) public onlyOwner {
+    function updateBalanceThreshold(uint256 _balanceThreshold) external onlyOwner {
+        if (_balanceThreshold == 0) {
+            revert IEarnErrors.EarnBalanceThresholdMustGreaterThanZero();
+        }
         balanceThreshold = _balanceThreshold;
         emit UpdateBalanceThreshold(msg.sender, _balanceThreshold);
     }
 
-    function updateMintMinLimit(uint256 _mintMinLimit) public onlyOwner {
+    function updateMintMinLimit(uint256 _mintMinLimit) external onlyOwner {
+        if (_mintMinLimit < 1 ether) {
+            revert IEarnErrors.EarnMintMinLimitMustGreaterThan1Core();
+        }
         mintMinLimit = _mintMinLimit;
         emit UpdateMintMinLimit(msg.sender, _mintMinLimit);
     }
 
-    function updateRedeemMinLimit(uint256 _redeemMinLimit) public onlyOwner {
+    function updateRedeemMinLimit(uint256 _redeemMinLimit) external onlyOwner {
+        if (_redeemMinLimit < 1 ether) {
+            revert IEarnErrors.EarnRedeemMinLimitMustGreaterThan1Core();
+        }
         redeemMinLimit = _redeemMinLimit;
         emit UpdateRedeemMinLimit(msg.sender, _redeemMinLimit);
     }
 
-    function updatePledgeAgentLimit(uint256 _pledgeAgentLimit) public onlyOwner {
+    function updatePledgeAgentLimit(uint256 _pledgeAgentLimit) external onlyOwner {
+        if (_pledgeAgentLimit < 1 ether) {
+            revert IEarnErrors.EarnPledgeAgentLimitMustGreaterThan1Core();
+        }
         pledgeAgentLimit = _pledgeAgentLimit;
         emit UpdatePledgeAgentLimit(msg.sender, _pledgeAgentLimit);
     }
 
-    function udpateLockDay(uint256 _lockDay) public onlyOwner {
+    function udpateLockDay(uint256 _lockDay) external onlyOwner {
         if (_lockDay == 0) {
             revert IEarnErrors.EarnLockDayMustGreaterThanZero();
         }
@@ -759,7 +789,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         emit UdpateLockDay(msg.sender, _lockDay);
     }
 
-    function updateProtocolFeePoints(uint256 _protocolFeePoints) public onlyOwner {
+    function updateProtocolFeePoints(uint256 _protocolFeePoints) external onlyOwner {
         if (_protocolFeePoints > RATE_BASE) {
             revert IEarnErrors.EarnProtocolFeePointMoreThanRateBase(_protocolFeePoints);
         }
@@ -767,7 +797,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         emit UpdateProtocolFeePoints(msg.sender, _protocolFeePoints);
     }
 
-    function updateProtocolFeeReveiver(address _protocolFeeReceiver) public onlyOwner {
+    function updateProtocolFeeReveiver(address _protocolFeeReceiver) external onlyOwner {
         if (_protocolFeeReceiver == address(0)) {
             revert IEarnErrors.EarnZeroProtocolFeeReceiver(_protocolFeeReceiver);
         }
@@ -775,7 +805,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         emit UpdateProtocolFeeReveiver(msg.sender, _protocolFeeReceiver);
     }
 
-    function updateOperator(address _operator) public onlyOwner {
+    function updateOperator(address _operator) external onlyOwner {
         if (_operator == address(0)) {
             revert IEarnErrors.EarnZeroOperator(_operator);
         }
@@ -783,11 +813,27 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         emit UpdateOperator(msg.sender, _operator);
     }
 
-    function pause() public onlyOwner {
+    function updateRedeemCountLimit(uint256 _redeemCountLimit) external onlyOwner {
+        if (_redeemCountLimit == 0) {
+            revert IEarnErrors.EarnRedeemCountLimitMustGreaterThanZero();
+        }
+        redeemCountLimit = _redeemCountLimit;
+        emit UpdateRedeemCountLimit(msg.sender, _redeemCountLimit);
+    }
+
+    function updateExchangeRateQueryLimit(uint256 _exchangeRateQueryLimit) external onlyOwner {
+        if (_exchangeRateQueryLimit == 0) {
+            revert IEarnErrors.EarnExchangeRateQueryLimitMustGreaterThanZero();
+        }
+        exchangeRateQueryLimit = _exchangeRateQueryLimit;
+        emit UpdateExchangeRateQueryLimit(msg.sender, _exchangeRateQueryLimit);
+    }
+
+    function pause() external onlyOwner {
         _pause();
     }
 
-    function unpause() public onlyOwner {
+    function unpause() external onlyOwner {
         _unpause();
     }
 

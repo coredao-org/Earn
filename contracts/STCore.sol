@@ -6,9 +6,12 @@ import {ISTCoreErrors} from "./interface/IErrors.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract STCore is ERC20, Ownable{
+contract STCore is ERC20, Ownable {
     // Contract address of EARN
     address public earn;
+
+    // Used to record whether setEarnAddress function has been called
+    bool private setEarnCalled = false;
 
     event SetEarnAddress(address indexed operator, address earn);
 
@@ -19,20 +22,26 @@ contract STCore is ERC20, Ownable{
         _;
     }
 
-    function mint(address account, uint256 amount) public onlyEarn {
+    modifier calledOnce() {
+        require(!setEarnCalled, "Set earn address can only be called once");
+        _;
+    }
+
+    function mint(address account, uint256 amount) external onlyEarn {
         _mint(account, amount);
     }
 
-    function burn(address account, uint256 amount) public onlyEarn {
+    function burn(address account, uint256 amount) external onlyEarn {
         _burn(account, amount);
     } 
 
     // Only owner can modify earn address
-    function setEarnAddress(address _earn) public onlyOwner {
+    function setEarnAddress(address _earn) external onlyOwner calledOnce {
         if (_earn == address(0)) {
             revert ISTCoreErrors.STCoreZeroEarn(_earn);
         }
         earn = _earn;
+        setEarnCalled = true;
         emit SetEarnAddress(msg.sender, _earn);
     }
 }

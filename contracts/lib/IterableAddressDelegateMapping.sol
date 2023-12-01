@@ -22,15 +22,22 @@ library IterableAddressDelegateMapping {
         return map.keys.length;
     }
 
-    function set(Map storage map, address key, DelegateInfo memory val, bool increase) internal {
+
+    function add(Map storage map, address key, DelegateInfo memory val) internal {
         if (map.indexOf[key] != 0) {
-            if (increase) {
-                map.values[key].amount += val.amount;
-                map.values[key].earning += val.earning;
-            } else {
-                map.values[key].amount -= val.amount;
-                map.values[key].earning -= val.earning;
-            }
+            map.values[key].amount += val.amount;
+            map.values[key].earning += val.earning;
+        } else {
+            map.values[key] = val;
+            map.keys.push(key);
+            map.indexOf[key] = map.keys.length;
+        }
+    }
+
+    function substract(Map storage map, address key, DelegateInfo memory val) internal {
+        if (map.indexOf[key] != 0) {
+             map.values[key].amount -= val.amount;
+             map.values[key].earning -= val.earning;
         } else {
             map.values[key] = val;
             map.keys.push(key);
