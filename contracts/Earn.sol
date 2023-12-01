@@ -37,12 +37,13 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // The number of seconds in a day
     uint256 public constant DAY_INTERVAL = 86400;
 
+    // https://github.com/coredao-org/core-genesis-contract/blob/master/contracts/CandidateHub.sol
     uint256 public constant VALIDATOR_ACTIVE_STATUS = 17;
 
     // Address of stCORE contract: STCORE
     address public STCORE; 
 
-    // Exchange rate (conversion rate between stCORE and Core) of each round
+    // Exchange rate (conversion rate between stCORE and CORE)
     // Exchange rate is calculated and updated at the beginning of each round
     uint256[] public exchangeRates;
 
@@ -71,22 +72,24 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     uint256 public protocolFeePoints = 0;
     address public protocolFeeReceiver;
 
-    // The operator address to trigger afterTurnRound() and reBalance() methods
+    // The operator address to trigger afterTurnRound() and rebalance methods
     address public operator;
-    uint256 public lastOperateRound;
+    uint256 public roundTag;
 
     // Length limit of RedeemRecord[]
-    uint256 public redeemCountLimit  = 100;
+    // A user can keep up to {lastOperateRound} redeem records
+    // This is introduced to avoid gas issue when users withdraw CORE from this contract
+    uint256 public redeemCountLimit = 100;
 
-    // Query count limit of exchangeRates
+    // Query limit of exchangeRates
     uint256 public exchangeRateQueryLimit = 365;
 
-    // Redeem amount which unDelegate
+    // The amount of CORE which are requested for redumption but not yet undelegated from PledgeAgent
     uint256 public toWithdrawAmount = 0;
 
     /// --- EVENTS --- ///
 
-    // User operations event
+    // User operations events
     event Mint(address indexed account, uint256 core, uint256 stCore);
     event Delegate(address indexed validator, uint256 amount);
     event UnDelegate(address indexed validator, uint256 amount);
@@ -94,16 +97,16 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     event Withdraw(address indexed account, uint256 amount, uint256 protocolFee);
     event Transfer(address indexed from, address indexed to, uint256 amount);
 
-    // Operator operations event
+    // Operator operations events
     event CalculateExchangeRate(uint256 round, uint256 exchangeRate);
     event ReBalance(address indexed from, address indexed to, uint256 amount);
 
-    // Admin operations event
+    // Admin operations events
     event UpdateBalanceThreshold(address indexed caller, uint256 balanceThreshold);
     event UpdateMintMinLimit(address indexed caller, uint256 mintMinLimit);
     event UpdateRedeemMinLimit(address indexed caller, uint256 redeemMinLimit);
     event UpdatePledgeAgentLimit(address indexed caller, uint256 pledgeAgentLimit);
-    event UdpateLockDay(address indexed caller, uint256 lockDay);
+    event UpdateLockDay(address indexed caller, uint256 lockDay);
     event UpdateProtocolFeePoints(address indexed caller, uint256 protocolFeePoints);
     event UpdateProtocolFeeReveiver(address indexed caller, address protocolFeeReceiver);
     event UpdateOperator(address indexed caller, address operator);
@@ -135,7 +138,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         operator = _operator;
 
         exchangeRates.push(RATE_BASE);
-        lastOperateRound = _currentRound();
+        roundTag = _currentRound();
     }
 
     function _authorizeUpgrade(address newImplementation) internal onlyOwner override {}
@@ -143,17 +146,17 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     /// --- MODIFIERS --- ///
 
     modifier onlyOperator() {
-        require(msg.sender == operator, "Not Operator");
+        require(msg.sender == operator, "Not operator");
         _;
     }
 
     modifier afterSettled() {
-        require(lastOperateRound == _currentRound(), "Turn round not triggered");
+        require(roundTag == _currentRound(), "Turn round not triggered");
         _;
     }
 
     modifier canDelegate(address _validator) {
-        require (ICandidateHub(CANDIDATE_HUB).canDelegate(_validator), "Invalid candidate");
+        require (ICandidateHub(CANDIDATE_HUB).canDelegate(_validator), "Can not delegate to validator");
         _;
     }
     
@@ -174,7 +177,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Delegate CORE to PledgeAgent
          _delegate(_validator, amount);
 
-        // Update local records
+        // Update delegate records
         DelegateInfo memory delegateInfo = DelegateInfo({
             amount: amount,
             earning: 0
@@ -207,10 +210,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Burn stCORE
         ISTCore(STCORE).burn(account, stCore);
 
-        // Calculate protocol fee and send to receiver address
+        // Calculate protocol fee
         uint256 protocolFee = core * protocolFeePoints / RATE_BASE;
 
-        // Update local records
+        // Update redeem records
         uint256 redeemAmount = core - protocolFee;
         RedeemRecord memory redeemRecord = RedeemRecord({
             redeemTime: block.timestamp,
@@ -226,7 +229,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         emit Redeem(account, stCore, redeemAmount, protocolFee);
     }
 
-    // Withdraw/claim CORE tokens after redemption period
+    // Withdraw CORE tokens after redemption period
     function withdraw() external afterSettled nonReentrant whenNotPaused{
         address account = msg.sender;
         
@@ -236,7 +239,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             revert IEarnErrors.EarnEmptyRedeemRecord();
         }
 
-        // @openissue possible gas issues when iterating a large array
         uint256 accountAmount = 0;
         uint256 protocolFeeAmount = 0;
         for (uint256 i = records.length; i != 0; i--) {
@@ -251,12 +253,12 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             }
         }
 
-        // Check redeem records exist
+        // No eligible records found
         if (accountAmount == 0) {
             revert IEarnErrors.EarnRedeemRecordNotFound(account);
         }
 
-        // Amount of unDelegate
+        // Amount of CORE to undelegate
         uint256 totalAmount = accountAmount + protocolFeeAmount;
 
         // Undelegate CORE from validators
@@ -276,25 +278,26 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             payable(protocolFeeReceiver).sendValue(protocolFeeAmount);
         }
 
-        // Deduct undelegate amount
+        // Update toWithdrawAmount
         toWithdrawAmount -= totalAmount;
 
         emit Withdraw(account, accountAmount, protocolFeeAmount);
     }
 
-    /// --- SYSTEM HOOKS --- ///
+    /// --- OPERATOR INTERACTIONS --- ///
 
     // Triggered right after turn round
-    // This method cannot revert
+    // Users are not allowed to operate before this method is executed successfully in each round
     // The Earn contract does following in this method
     //  1. Claim rewards from each validator
     //  2. Stake rewards back to corresponding validators (auto compounding)
     //  3. Update daily exchange rate
-    // During the process, this method also moves delegates from inactive validators to newly elected validators
-    // The new elected validators can also be passed in as parameters to play as a back up role -
-    //  in the extreme case where all existing validators are replaced by new ones 
+    // During the process, this method also moves delegates from inactive validators 
+    //  to active (newly elected) validators
+    // The operator can also pass in new elected validators to act as a fallback catch
+    //  in the case where all existing validators are replaced in the new round
     function afterTurnRound(address[] memory newElectedValidators) external onlyOperator {
-        // Amount of CORE to undelegate from validators unelected in the new round
+        // Amount of CORE to undelegate from validators not active in the new round
         uint256 unDelegateAmount;
 
         // Claim rewards
@@ -308,10 +311,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
             delegateInfo.earning += _earning;
 
-            // Check validatos status
+            // Check validator status
             if (!_isActive(key)) {
                 // Undelegate from inactive validator
-                // If success, record it and wait to be deleted
                 _unDelegate(key, delegateInfo.amount);
                 unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
                 validatorDelegateMap.remove(key);
@@ -319,12 +321,12 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
      
         }
 
-        // Delegate `unDelegateAmount` to a random chosen validator
-        // If all validators staked by Earn in last round become inactive, choose the first validator from parameter
+        // Delegate {unDelegateAmount} to a random chosen validator
+        // If all validators staked by Earn in last round become inactive
+        //  choose the first validator in the passed in array
         uint256 validatorSize = validatorDelegateMap.size();
         if (validatorSize == 0) {
             if (newElectedValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(newElectedValidators[0])) {
-                // If all validators ineffective, delegate all amount to emergency validator
                 DelegateInfo memory backupDelegateInfo = DelegateInfo({
                     amount: 0,
                     earning: unDelegateAmount
@@ -337,7 +339,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         } else {
             uint256 randomIndex = _randomIndex(validatorSize);
             address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
-            // Set {unDelegateAmount} to a random validator's earning, and wait to be delegated
+            // Add {unDelegateAmount} to the randomly chosen validator's earning
+            //  which will be used to delegate to this validator in the follow step
             DelegateInfo memory randomDelegateInfo = DelegateInfo({
                 amount: 0,
                 earning: unDelegateAmount
@@ -379,11 +382,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
 
         // Update round tag
-        lastOperateRound = currentRound;
+        roundTag = currentRound;
     }
 
     // This method can be triggered on a regular basis, e.g. hourly/daily/weekly/etc
-    // This method cannot revert
     // The Earn contract rebalances staking on top/bottom validators in this method
     function reBalance() external afterSettled onlyOperator{
         if (validatorDelegateMap.size() <= 1) {
@@ -448,6 +450,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         return redeemRecords[msg.sender];
     }
 
+    // @openissue change msg.sender to a passed in address
     function getRedeemAmount() external view returns (uint256 unlockedAmount, uint256 lockedAmount) {
         RedeemRecord[] storage records = redeemRecords[msg.sender];
         for (uint256 i = 0; i < records.length; i++) {
@@ -461,7 +464,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     function getExchangeRates(uint256 target) external view returns(uint256[] memory _exchangeRates) {
-        // If target greater than query limit, return empty
+        // Not allow to query too many rounds
         if (target > exchangeRateQueryLimit) {
             return _exchangeRates;
         }
@@ -519,6 +522,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     // Delegate to validator
+    // @openissue remove unnecessary code
     function _delegate(address validator, uint256 amount) private {
         uint256 balanceBefore = address(this).balance - amount;
         IPledgeAgent(PLEDGE_AGENT).delegateCoin{value: amount}(validator);
@@ -540,10 +544,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // There is dues protection in PledageAgent, which are
     //  1. Can only delegate 1+ CORE
     //  2. Can only undelegate 1+ CORE AND can only leave 1+ CORE on validator after undelegate 
-    // Internally, Earn delegate/undelegate to validators on each mint/redeem action
+    // Internally, Earn delegates to/undelegates from validators on each mint/redeem action
     // As a result, to make the system solid. For any undelegate action from Earn it must result in
     //  1. The validator must be cleared or have 1+ CORE remaining after undelegate AND
-    //  2. Earn contract must have 0 or 1+ CORE on any validator after undelegate
+    //  2. Earn contract must have 0 or 1+ CORE left to further undelegate
     // Otherwise, Earn might fail to undelegate further because of the dues protection from PledgeAgent
     function _unDelegateWithStrategy(uint256 amount) private {
         // Random validator position
@@ -586,7 +590,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     } else {
                         // Case 3: the amount available on the validator >= the amount needs to be undelegated AND
                         //          the amount available on the validator <= the amount needs to be undelegated + 1
-                        // In this case we need to make sure there are 1 CORE token left on Earn side so both 
+                        // In this case we need to make sure there are 1 CORE token left to further undelegate so both 
                         //   the validator and Earn are safe on the PledgeAgent dues protection
                         uint256 delegateAmount = amount - pledgeAgentLimit;
                         uint256 delegatorLeftAmount = delegateInfo.amount - delegateAmount;
@@ -596,7 +600,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                                 earning: 0
                             });
                             _unDelegate(key, delegateAmount);
-                            amount -= delegateAmount; // amount equals to 1 ether
+                            amount -= delegateAmount;
                             validatorDelegateMap.substract(key, unDelegateInfo);
                         }
                     }
@@ -614,7 +618,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     } else {
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
                         //          the amount available on the validator <= the amount needs to be undelegated
-                        // In this case we need to make sure there are 1 CORE token left on validator side so both 
+                        // In this case we need to make sure there are 1 CORE token left on validator so both 
                         //   the validator and Earn are safe on the PledgeAgent dues protection
                         uint256 delegateAmount = delegateInfo.amount - pledgeAgentLimit;
                         uint256 accountLeftAmount = amount - delegateAmount;
@@ -647,6 +651,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     // Undelegate from a validator
+    // @openissue remove unnecessary code
     function _unDelegate(address validator, uint256 amount) private {
         uint256 balanceBefore = address(this).balance;
         IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
@@ -664,6 +669,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         emit UnDelegate(validator, amount);
     }
 
+    // @openissue remove unnecessary code
     function _transfer(address from, address to, uint256 amount) private {
         uint256 balanceBefore = address(this).balance;
         IPledgeAgent(PLEDGE_AGENT).transferCoin(from, to, amount);
@@ -712,7 +718,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
             emit ReBalance(_from, _to, _transferAmount);
         } else {
-             revert IEarnErrors.EarnReBalanceInvalidTransferAmount(_from, _fromAmount, _transferAmount);
+            revert IEarnErrors.EarnReBalanceInvalidTransferAmount(_from, _fromAmount, _transferAmount);
         }
     }
 
@@ -750,12 +756,12 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         emit UpdatePledgeAgentLimit(msg.sender, _pledgeAgentLimit);
     }
 
-    function udpateLockDay(uint256 _lockDay) external onlyOwner {
+    function updateLockDay(uint256 _lockDay) external onlyOwner {
         if (_lockDay == 0) {
             revert IEarnErrors.EarnLockDayMustGreaterThanZero();
         }
         lockDay = _lockDay;
-        emit UdpateLockDay(msg.sender, _lockDay);
+        emit UpdateLockDay(msg.sender, _lockDay);
     }
 
     function updateProtocolFeePoints(uint256 _protocolFeePoints) external onlyOwner {
