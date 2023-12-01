@@ -29,6 +29,9 @@ struct RedeemRecord {
 
     // Amount of stCORE
     uint256 stCore;
+
+    // Amount of protocol fee
+    uint256 protocolFee;
 }
 
 // Candidate copy from system contract

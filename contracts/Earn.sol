@@ -81,6 +81,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // Query count limit of exchangeRates
     uint256 public exchangeRateQueryLimit = 365;
 
+    // Redeem amount which unDelegate
+    uint256 public toWithdrawAmount = 0;
+
     /// --- EVENTS --- ///
 
     // User operations event
@@ -88,7 +91,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     event Delegate(address indexed validator, uint256 amount);
     event UnDelegate(address indexed validator, uint256 amount);
     event Redeem(address indexed account, uint256 stCore, uint256 core, uint256 protocolFee);
-    event Withdraw(address indexed account, uint256 amount);
+    event Withdraw(address indexed account, uint256 amount, uint256 protocolFee);
     event Transfer(address indexed from, address indexed to, uint256 amount);
 
     // Operator operations event
@@ -204,14 +207,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Burn stCORE
         ISTCore(STCORE).burn(account, stCore);
 
-        // Undelegate CORE from validators
-        _unDelegateWithStrategy(core);
-
         // Calculate protocol fee and send to receiver address
         uint256 protocolFee = core * protocolFeePoints / RATE_BASE;
-        if (protocolFee != 0) {
-            payable(protocolFeeReceiver).sendValue(protocolFee);
-        }
 
         // Update local records
         uint256 redeemAmount = core - protocolFee;
@@ -219,9 +216,12 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             redeemTime: block.timestamp,
             unlockTime: block.timestamp + DAY_INTERVAL * lockDay,
             amount: redeemAmount,
-            stCore: stCore
+            stCore: stCore,
+            protocolFee: protocolFee
         });
         records.push(redeemRecord);
+
+        toWithdrawAmount += core;
 
         emit Redeem(account, stCore, redeemAmount, protocolFee);
     }
@@ -237,11 +237,13 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
 
         // @openissue possible gas issues when iterating a large array
-        uint256 amount = 0;
+        uint256 accountAmount = 0;
+        uint256 protocolFeeAmount = 0;
         for (uint256 i = records.length; i != 0; i--) {
             RedeemRecord memory record = records[i - 1];
              if (record.unlockTime < block.timestamp) {
-                amount += record.amount;
+                accountAmount += record.amount;
+                protocolFeeAmount += record.protocolFee;
                 if (i != records.length) {
                     records[i - 1] = records[records.length - 1];
                 }
@@ -250,20 +252,34 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
 
         // Check redeem records exist
-        if (amount == 0) {
+        if (accountAmount == 0) {
             revert IEarnErrors.EarnRedeemRecordNotFound(account);
         }
 
+        // Amount of unDelegate
+        uint256 totalAmount = accountAmount + protocolFeeAmount;
+
+        // Undelegate CORE from validators
+        _unDelegateWithStrategy(totalAmount);
+
         // Check contract balance
         // This shall not happen, just a sanity check
-        if (address(this).balance < amount) {
-            revert IEarnErrors.EarnInsufficientBalance(address(this).balance, amount);
+        if (address(this).balance < totalAmount) {
+            revert IEarnErrors.EarnInsufficientBalance(address(this).balance, totalAmount);
         }
 
         // Transfer CORE to user
-        payable(account).sendValue(amount);
+        payable(account).sendValue(accountAmount);
 
-        emit Withdraw(account, amount);
+        // Transfer CORE to porotocol fee receiver
+        if (protocolFeeAmount != 0) {
+            payable(protocolFeeReceiver).sendValue(protocolFeeAmount);
+        }
+
+        // Deduct undelegate amount
+        toWithdrawAmount -= totalAmount;
+
+        emit Withdraw(account, accountAmount, protocolFeeAmount);
     }
 
     /// --- SYSTEM HOOKS --- ///
@@ -354,8 +370,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                 DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
                 _capital += delegateInfo.amount;
             }
-            if (_capital > 0) {
-                uint256 rate = _capital * RATE_BASE / totalSupply;
+            if (_capital > toWithdrawAmount) {
+                uint256 rate = (_capital - toWithdrawAmount) * RATE_BASE / totalSupply;
                 exchangeRates.push(rate);
                 
                 emit CalculateExchangeRate(currentRound, rate);
