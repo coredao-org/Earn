@@ -28,17 +28,11 @@ interface IEarnErrors {
     // mint related errors
     error EarnZeroValidator(address validator);
     error EarnMintAmountTooSmall(address account, uint256 amount);
-    error EarnDelegateFailedWhileMint(address account, address validator, uint256 amount);
     error EarnCallStCoreMintFailed(address account, uint256 amount, uint256 stCore);
 
     // redeem related errors
     error EarnSTCoreTooSmall(address account, uint256 stCore);
     error EarnCallStCoreBurnFailed(address account, uint256 amount, uint256 stCore);
-    error EarnUnDelegateFailedCase1(address validator, uint256 amount);
-    error EarnUnDelegateFailedCase2(address validator, uint256 amount);
-    error EarnUnDelegateFailedCase3(address validator, uint256 amount);
-    error EarnUnDelegateFailedCase4(address validator, uint256 amount);
-    error EarnUnDelegateFailedCase5(address validator, uint256 amount);
     error EarnUnDelegateFailedFinally(address validator, uint256 amount);
     error EarnEmptyValidator();
     error EarnRdeemCountOverLimit(address account, uint256 redeemCount, uint256 limit);
@@ -50,7 +44,6 @@ interface IEarnErrors {
 
     // after turn round related errors
     error EarnValidatorsAllOffline();
-    error EarnAfterTurnRoundDelegateFailed(address validator, uint256 amount);
 }
 
 interface ISTCoreErrors {

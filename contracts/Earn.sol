@@ -3,6 +3,8 @@ pragma solidity 0.8.4;
 
 import {IEarnErrors} from "./interface/IErrors.sol";
 import "./interface/ICandidateHub.sol";
+import "./interface/ISTCore.sol";
+import "./interface/IPledgeAgent.sol";
 
 import "./lib/IterableAddressDelegateMapping.sol";
 import "./lib/Structs.sol";
@@ -167,10 +169,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
 
         // Delegate CORE to PledgeAgent
-        bool success = _delegate(_validator, amount);
-        if (!success) {
-            revert IEarnErrors.EarnDelegateFailedWhileMint(account, _validator,amount);
-        }
+         _delegate(_validator, amount);
 
         // Update local records
         DelegateInfo memory delegateInfo = DelegateInfo({
@@ -181,11 +180,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
         // Mint stCORE and send to users
         uint256 stCore = _exchangeSTCore(amount);
-        bytes memory callData = abi.encodeWithSignature("mint(address,uint256)", account, stCore);
-        (success, ) = STCORE.call(callData);
-        if (!success) {
-            revert IEarnErrors.EarnCallStCoreMintFailed(account, amount, stCore);
-        }
+        ISTCore(STCORE).mint(account, stCore);
 
         emit Mint(account, amount, stCore);
     }
@@ -207,11 +202,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         uint256 core = _exchangeCore(stCore);
 
         // Burn stCORE
-        bytes memory callData = abi.encodeWithSignature("burn(address,uint256)", account, stCore);
-        (bool success, ) = STCORE.call(callData);
-        if (!success) {
-            revert IEarnErrors.EarnCallStCoreBurnFailed(account, core, stCore);
-        }
+        ISTCore(STCORE).burn(account, stCore);
 
         // Undelegate CORE from validators
         _unDelegateWithStrategy(core);
@@ -296,23 +287,20 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
             uint256 balanceBeforeClaim = address(this).balance;
-            bool success = _claim(key);
-            if (success) {
-                uint256 balanceAfterClaim = address(this).balance;
-                uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
-                delegateInfo.earning += _earning;
+            _claim(key);
+            uint256 balanceAfterClaim = address(this).balance;
+            uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
+            delegateInfo.earning += _earning;
 
-                // Check validatos status
-                if (!_isActive(key)) {
-                    // Undelegate from inactive validator
-                    // If success, record it and wait to be deleted
-                    success = _unDelegate(key, delegateInfo.amount);
-                    if (success) {
-                        unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
-                        validatorDelegateMap.remove(key);
-                    }
-                }
+            // Check validatos status
+            if (!_isActive(key)) {
+                // Undelegate from inactive validator
+                // If success, record it and wait to be deleted
+                _unDelegate(key, delegateInfo.amount);
+                unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
+                validatorDelegateMap.remove(key);
             }
+     
         }
 
         // Delegate `unDelegateAmount` to a random chosen validator
@@ -349,10 +337,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
             if(delegateInfo.earning > pledgeAgentLimit) {
                 uint256 delegateAmount = delegateInfo.earning;
-                bool success = _delegate(key, delegateAmount);
-                if (!success) {
-                    revert IEarnErrors.EarnAfterTurnRoundDelegateFailed(key, delegateAmount);
-                }
+                _delegate(key, delegateAmount);
                 delegateInfo.amount += delegateAmount;
                 delegateInfo.earning -= delegateAmount;
             } 
@@ -518,25 +503,21 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     // Delegate to validator
-    function _delegate(address validator, uint256 amount) private returns (bool) {
+    function _delegate(address validator, uint256 amount) private {
         uint256 balanceBefore = address(this).balance - amount;
-        bytes memory callData = abi.encodeWithSignature("delegateCoin(address)", validator);
-        (bool success, ) = PLEDGE_AGENT.call{value: amount}(callData);
-        if (success) {
-            uint256 balanceAfter = address(this).balance;
-            uint256 earning = balanceAfter - balanceBefore;
-            if (earning > 0) {
-                // This shall not happen as all rewards are claimed in afterTurnRound()
-                // Only for unexpected cases
-                DelegateInfo memory unprocessedReward = DelegateInfo({
-                    amount: 0,
-                    earning: earning
-                });
-                validatorDelegateMap.add(validator, unprocessedReward);
-            }
-            emit Delegate(validator, amount);
+        IPledgeAgent(PLEDGE_AGENT).delegateCoin{value: amount}(validator);
+        uint256 balanceAfter = address(this).balance;
+        uint256 earning = balanceAfter - balanceBefore;
+        if (earning > 0) {
+            // This shall not happen as all rewards are claimed in afterTurnRound()
+            // Only for unexpected cases
+            DelegateInfo memory unprocessedReward = DelegateInfo({
+                amount: 0,
+                earning: earning
+            });
+            validatorDelegateMap.add(validator, unprocessedReward);
         }
-        return success;
+        emit Delegate(validator, amount);
     }
 
     // Undelegate CORE from validators with strategy
@@ -570,10 +551,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         amount: amount,
                         earning: 0
                     });
-                    bool success = _unDelegate(key, amount);
-                    if (!success) {
-                        revert IEarnErrors.EarnUnDelegateFailedCase1(msg.sender, amount);
-                    }
+                    _unDelegate(key, amount);
                     amount = 0;
                     validatorDelegateMap.substract(key, unDelegateInfo);
                     break;
@@ -585,10 +563,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                             amount: amount,
                             earning: 0
                         });
-                        bool success = _unDelegate(key, amount);
-                        if (!success) {
-                            revert IEarnErrors.EarnUnDelegateFailedCase2(msg.sender, amount);
-                        }
+                        _unDelegate(key, amount);
                         amount = 0;
                         validatorDelegateMap.substract(key, unDelegateInfo);
                         break;
@@ -604,10 +579,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                                 amount: delegateAmount,
                                 earning: 0
                             });
-                            bool success = _unDelegate(key, delegateAmount);
-                            if (!success) {
-                                revert IEarnErrors.EarnUnDelegateFailedCase3(msg.sender, amount);
-                            }
+                            _unDelegate(key, delegateAmount);
                             amount -= delegateAmount; // amount equals to 1 ether
                             validatorDelegateMap.substract(key, unDelegateInfo);
                         }
@@ -620,10 +592,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                             amount: delegateInfo.amount,
                             earning: 0
                         });
-                        bool success = _unDelegate(key, delegateInfo.amount);
-                        if (!success) {
-                            revert IEarnErrors.EarnUnDelegateFailedCase4(msg.sender, amount);
-                        }
+                        _unDelegate(key, delegateInfo.amount);
                         amount -= delegateInfo.amount;
                         validatorDelegateMap.substract(key, unDelegateInfo);
                     } else {
@@ -638,10 +607,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                                 amount: delegateAmount,
                                 earning: 0
                             });
-                            bool success = _unDelegate(key, delegateAmount);
-                            if (!success) {
-                                revert IEarnErrors.EarnUnDelegateFailedCase5(msg.sender, amount);
-                            }
+                            _unDelegate(key, delegateAmount);
                             amount -= delegateAmount;
                             validatorDelegateMap.substract(key, unDelegateInfo);
                         }
@@ -665,54 +631,44 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     // Undelegate from a validator
-    function _unDelegate(address validator, uint256 amount) private returns (bool) {
+    function _unDelegate(address validator, uint256 amount) private {
         uint256 balanceBefore = address(this).balance;
-        bytes memory callData = abi.encodeWithSignature("undelegateCoin(address,uint256)", validator, amount);
-        (bool success, ) = PLEDGE_AGENT.call(callData);
-        if (success) {
-            uint256 balanceAfter = address(this).balance - amount;
-            uint256 earning = balanceAfter - balanceBefore;
-            if (earning > 0) {
-                // This shall not happen as all rewards are claimed in afterTurnRound()
-                // Only for unexpected cases
-                DelegateInfo memory unprocessedReward = DelegateInfo({
-                    amount: 0,
-                    earning: earning
-                });
-                validatorDelegateMap.add(validator, unprocessedReward);
-            }
-            emit UnDelegate(validator, amount);
+        IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
+        uint256 balanceAfter = address(this).balance - amount;
+        uint256 earning = balanceAfter - balanceBefore;
+        if (earning > 0) {
+            // This shall not happen as all rewards are claimed in afterTurnRound()
+            // Only for unexpected cases
+            DelegateInfo memory unprocessedReward = DelegateInfo({
+                amount: 0,
+                earning: earning
+            });
+            validatorDelegateMap.add(validator, unprocessedReward);
         }
-        return success;
+        emit UnDelegate(validator, amount);
     }
 
-    function _transfer(address from, address to, uint256 amount) private returns(bool) {
+    function _transfer(address from, address to, uint256 amount) private {
         uint256 balanceBefore = address(this).balance;
-        bytes memory callData = abi.encodeWithSignature("transferCoin(address,address,uint256)", from, to, amount);
-        (bool success, ) = PLEDGE_AGENT.call(callData);
-        if (success) {
-            uint256 balanceAfter = address(this).balance;
-            uint256 earning = balanceAfter - balanceBefore;
-            if (earning > 0) {
-                // This shall not happen as all rewards are claimed in afterTurnRound()
-                // Only for unexpected cases
-                DelegateInfo memory unprocessedReward = DelegateInfo({
-                    amount: 0,
-                    earning: earning
-                });
-                validatorDelegateMap.add(from, unprocessedReward);
-            }
-            emit Transfer(from, to, amount);
+        IPledgeAgent(PLEDGE_AGENT).transferCoin(from, to, amount);
+        uint256 balanceAfter = address(this).balance;
+        uint256 earning = balanceAfter - balanceBefore;
+        if (earning > 0) {
+            // This shall not happen as all rewards are claimed in afterTurnRound()
+            // Only for unexpected cases
+            DelegateInfo memory unprocessedReward = DelegateInfo({
+                amount: 0,
+                earning: earning
+            });
+            validatorDelegateMap.add(from, unprocessedReward);
         }
-        return success;
+        emit Transfer(from, to, amount);
     }
 
-    function _claim(address validator) private returns (bool){
+    function _claim(address validator) private {
         address[] memory addresses = new address[](1);
         addresses[0] = validator;
-        bytes memory callData = abi.encodeWithSignature("claimReward(address[])", addresses);
-        (bool success, ) = PLEDGE_AGENT.call(callData);
-        return success;
+        IPledgeAgent(PLEDGE_AGENT).claimReward(addresses);
     }
 
     function _randomIndex(uint256 length) private view returns (uint256) {
@@ -730,10 +686,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     function _reBalanceTransfer(address _from, address _to, uint256 _fromAmount, uint256 _transferAmount) private {
         if (_transferAmount >= pledgeAgentLimit && (_fromAmount ==_transferAmount ||  _fromAmount - _transferAmount >= pledgeAgentLimit)) {
-            bool success = _transfer(_from, _to, _transferAmount);
-            if (!success) {
-                revert IEarnErrors.EarnReBalanceTransferFailed(_from, _to, _transferAmount);
-            }
+            _transfer(_from, _to, _transferAmount);
             DelegateInfo memory transferInfo = DelegateInfo({
                 amount: _transferAmount,
                 earning: 0
