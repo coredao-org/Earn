@@ -299,7 +299,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Claim rewards
         for (uint i = validatorDelegateMap.size(); i != 0; i--) {
             address key = validatorDelegateMap.getKeyAtIndex(i - 1);
-            DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
             // Claim reward from validator
             _claim(key);
@@ -307,7 +306,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             // Check validator status
             if (!_isActive(key)) {
                 // Undelegate from inactive validator
-                _unDelegate(key, delegateInfo.amount);
+                _unDelegate(key, 0);
                 validatorDelegateMap.remove(key);
             }
         }
@@ -608,20 +607,17 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     // Delegate to validator
     function _delegate(address validator, uint256 amount) private {
-        uint256 balanceBefore = address(this).balance - amount;
         IPledgeAgent(PLEDGE_AGENT).delegateCoin{value: amount}(validator);
         emit Delegate(validator, amount);
     }
 
     // Undelegate from a validator
     function _unDelegate(address validator, uint256 amount) private {
-        uint256 balanceBefore = address(this).balance;
         IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
         emit UnDelegate(validator, amount);
     }
 
     function _transfer(address from, address to, uint256 amount) private {
-        uint256 balanceBefore = address(this).balance;
         IPledgeAgent(PLEDGE_AGENT).transferCoin(from, to, amount);
         emit Transfer(from, to, amount);
     }
