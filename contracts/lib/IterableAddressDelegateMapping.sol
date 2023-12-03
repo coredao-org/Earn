@@ -6,11 +6,11 @@ import "./Structs.sol";
 library IterableAddressDelegateMapping {
     struct Map {
         address[] keys;
-        mapping(address => DelegateInfo) values;
+        mapping(address => uint256) values;
         mapping(address => uint) indexOf;
     }
 
-    function get(Map storage map, address key) internal view returns (DelegateInfo storage) {
+    function get(Map storage map, address key) internal view returns (uint256) {
         return map.values[key];
     }
 
@@ -23,9 +23,9 @@ library IterableAddressDelegateMapping {
     }
 
 
-    function add(Map storage map, address key, DelegateInfo memory val) internal {
+    function add(Map storage map, address key, uint256 val) internal {
         if (map.indexOf[key] != 0) {
-            map.values[key].amount += val.amount;
+            map.values[key] += val;
         } else {
             map.values[key] = val;
             map.keys.push(key);
@@ -33,9 +33,9 @@ library IterableAddressDelegateMapping {
         }
     }
 
-    function substract(Map storage map, address key, DelegateInfo memory val) internal {
+    function substract(Map storage map, address key, uint256 val) internal {
         if (map.indexOf[key] != 0) {
-             map.values[key].amount -= val.amount;
+             map.values[key] -= val;
         } else {
             map.values[key] = val;
             map.keys.push(key);

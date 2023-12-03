@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: Apache2.0
 pragma solidity 0.8.4;
 
-struct DelegateInfo {
-    // Delegate amount
-    uint256 amount;
-}
-
 struct RedeemRecord {
     // Redeem action time
     uint256 redeemTime;

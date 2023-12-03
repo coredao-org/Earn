@@ -178,10 +178,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
          _delegate(_validator, amount);
 
         // Update delegate records
-        DelegateInfo memory delegateInfo = DelegateInfo({
-            amount: amount
-        });
-        validatorDelegateMap.add(_validator, delegateInfo);
+        validatorDelegateMap.add(_validator, amount);
 
         // Mint stCORE and send to users
         uint256 stCore = _exchangeSTCore(amount);
@@ -317,28 +314,24 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         uint256 validatorSize = validatorDelegateMap.size();
         if (validatorSize == 0) {
             if (newElectedValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(newElectedValidators[0])) {
-                if (address(this).balance >= pledgeAgentLimit) {
+                uint256 delegateAmount = address(this).balance;
+                if (delegateAmount >= pledgeAgentLimit) {
                     // All balance delegate to back up validator
-                    DelegateInfo memory backupDelegateInfo = DelegateInfo({
-                        amount: address(this).balance
-                    });
-                    validatorDelegateMap.add(newElectedValidators[0], backupDelegateInfo);
-                    _delegate(newElectedValidators[0], backupDelegateInfo.amount);
+                    validatorDelegateMap.add(newElectedValidators[0], delegateAmount);
+                    _delegate(newElectedValidators[0], delegateAmount);
                 }
             } else {
                 // should not happen
                 revert IEarnErrors.EarnValidatorsAllOffline();
             }        
         } else {
-            if (address(this).balance >= pledgeAgentLimit) {
+            uint256 delegateAmount = address(this).balance;
+            if (delegateAmount>= pledgeAgentLimit) {
                 uint256 randomIndex = _randomIndex(validatorSize);
                 address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
                 // // All balance delegate to back up validator
-                DelegateInfo memory randomDelegateInfo = DelegateInfo({
-                    amount: address(this).balance
-                });
-                validatorDelegateMap.add(randomKey, randomDelegateInfo);
-                _delegate(randomKey, randomDelegateInfo.amount);
+                validatorDelegateMap.add(randomKey, delegateAmount);
+                _delegate(randomKey, delegateAmount);
             }
         }
 
@@ -350,8 +343,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             uint256 _capital = 0;
             for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
                 address key = validatorDelegateMap.getKeyAtIndex(i);
-                DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
-                _capital += delegateInfo.amount;
+                _capital += validatorDelegateMap.get(key);
             }
             if (_capital > toWithdrawAmount) {
                 uint256 rate = (_capital - toWithdrawAmount) * RATE_BASE / totalSupply;
@@ -372,22 +364,23 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             revert IEarnErrors.EarnEmptyValidator();
         }
 
+        // Use the first validator as a benchmark
         address key = validatorDelegateMap.getKeyAtIndex(0);
-        DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
+        uint256 initDelegateAmount = validatorDelegateMap.get(key);
 
         // Find max and min delegate amount of validator
-        uint256 max = delegateInfo.amount;
+        uint256 max = initDelegateAmount;
         address maxValidator = key;
-        uint256 min = delegateInfo.amount;
+        uint256 min = initDelegateAmount;
         address minValidator = key;
         for (uint256 i = 1; i < validatorDelegateMap.size(); i++) {
             key = validatorDelegateMap.getKeyAtIndex(i);
-            delegateInfo = validatorDelegateMap.get(key);
-            if (delegateInfo.amount > max) {
-                max = delegateInfo.amount;
+            uint256 delegateAmount = validatorDelegateMap.get(key);
+            if (delegateAmount > max) {
+                max = delegateAmount;
                 maxValidator = key;
-            } else if (delegateInfo.amount < min) {
-                min = delegateInfo.amount;
+            } else if (delegateAmount < min) {
+                min = delegateAmount;
                 minValidator = key;
             }
         }
@@ -415,14 +408,14 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             revert IEarnErrors.EarnEmptyValidator();
         }
 
-        DelegateInfo memory fromValidator = validatorDelegateMap.get(_from);
+        uint256 fromValidatorAmount = validatorDelegateMap.get(_from);
 
-        if (fromValidator.amount < _transferAmount) {
-            revert IEarnErrors.EarnReBalanceInsufficientAmount(_from, fromValidator.amount, _transferAmount);
+        if (fromValidatorAmount < _transferAmount) {
+            revert IEarnErrors.EarnReBalanceInsufficientAmount(_from, fromValidatorAmount, _transferAmount);
         }
         
         // Call transfer logic
-        _reBalanceTransfer(_from, _to, fromValidator.amount, _transferAmount);
+        _reBalanceTransfer(_from, _to, fromValidatorAmount, _transferAmount);
     }
 
     /// --- VIEW METHODS ---///
@@ -477,8 +470,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         uint256 mapSize = validatorDelegateMap.size();
         for (uint256 i = 0; i < mapSize; i++) {
             address key = validatorDelegateMap.getKeyAtIndex(i);
-            DelegateInfo memory delegateInfo = validatorDelegateMap.get(key);
-            amount += delegateInfo.amount;
+            amount += validatorDelegateMap.get(key);
         }
         return amount;
     }
@@ -521,29 +513,23 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         uint256 index = fromIndex;
         while(!(index == fromIndex && reachedEnd) && amount > 0) {
             address key = validatorDelegateMap.getKeyAtIndex(index);
-            DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
+            uint256 validatorAmount = validatorDelegateMap.get(key);
 
-            if (delegateInfo.amount > 0) {
-                if (delegateInfo.amount == amount) {
+            if (validatorAmount > 0) {
+                if (validatorAmount == amount) {
                     // Case 1: the amount available on the validator == the amount needs to be undelegated
                     // Undelegate all the tokens from the validator
-                    DelegateInfo memory unDelegateInfo = DelegateInfo({
-                        amount: amount
-                    });
                     _unDelegate(key, amount);
+                    validatorDelegateMap.substract(key, amount);
                     amount = 0;
-                    validatorDelegateMap.substract(key, unDelegateInfo);
                     break;
-                } else if (delegateInfo.amount > amount) {
-                    if (delegateInfo.amount >= amount + pledgeAgentLimit) {
+                } else if (validatorAmount > amount) {
+                    if (validatorAmount >= amount + pledgeAgentLimit) {
                     // Case 2: the amount available on the validator >= the amount needs to be undelegated + 1
                     // Undelegate all the tokens from the validator
-                        DelegateInfo memory unDelegateInfo = DelegateInfo({
-                            amount: amount
-                        });
                         _unDelegate(key, amount);
+                        validatorDelegateMap.substract(key, amount);
                         amount = 0;
-                        validatorDelegateMap.substract(key, unDelegateInfo);
                         break;
                     } else {
                         // Case 3: the amount available on the validator >= the amount needs to be undelegated AND
@@ -551,40 +537,31 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         // In this case we need to make sure there are 1 CORE token left to further undelegate so both 
                         //   the validator and Earn are safe on the PledgeAgent dues protection
                         uint256 delegateAmount = amount - pledgeAgentLimit;
-                        uint256 delegatorLeftAmount = delegateInfo.amount - delegateAmount;
+                        uint256 delegatorLeftAmount = validatorAmount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && delegatorLeftAmount > pledgeAgentLimit) {
-                            DelegateInfo memory unDelegateInfo = DelegateInfo({
-                                amount: delegateAmount
-                            });
                             _unDelegate(key, delegateAmount);
+                             validatorDelegateMap.substract(key, delegateAmount);
                             amount -= delegateAmount;
-                            validatorDelegateMap.substract(key, unDelegateInfo);
                         }
                     }
                 } else {
-                    if (amount >= delegateInfo.amount + pledgeAgentLimit) {
+                    if (amount >= validatorAmount + pledgeAgentLimit) {
                         // Case 4: the amount available on the validator <= the amount needs to be undelegated - 1
                         // Clear the validator and move to the next one
-                        DelegateInfo memory unDelegateInfo = DelegateInfo({
-                            amount: delegateInfo.amount
-                        });
-                        _unDelegate(key, delegateInfo.amount);
-                        amount -= delegateInfo.amount;
-                        validatorDelegateMap.substract(key, unDelegateInfo);
+                        _unDelegate(key, validatorAmount);
+                        validatorDelegateMap.substract(key, validatorAmount);
+                        amount -= validatorAmount;
                     } else {
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
                         //          the amount available on the validator <= the amount needs to be undelegated
                         // In this case we need to make sure there are 1 CORE token left on validator so both 
                         //   the validator and Earn are safe on the PledgeAgent dues protection
-                        uint256 delegateAmount = delegateInfo.amount - pledgeAgentLimit;
+                        uint256 delegateAmount = validatorAmount - pledgeAgentLimit;
                         uint256 accountLeftAmount = amount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && accountLeftAmount > pledgeAgentLimit) {
-                            DelegateInfo memory unDelegateInfo = DelegateInfo({
-                                amount: delegateAmount
-                            });
                             _unDelegate(key, delegateAmount);
+                            validatorDelegateMap.substract(key, delegateAmount);
                             amount -= delegateAmount;
-                            validatorDelegateMap.substract(key, unDelegateInfo);
                         }
                     }
                 }
@@ -644,11 +621,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     function _reBalanceTransfer(address _from, address _to, uint256 _fromAmount, uint256 _transferAmount) private {
         if (_transferAmount >= pledgeAgentLimit && (_fromAmount ==_transferAmount ||  _fromAmount - _transferAmount >= pledgeAgentLimit)) {
             _transfer(_from, _to, _transferAmount);
-            DelegateInfo memory transferInfo = DelegateInfo({
-                amount: _transferAmount
-            });
-            validatorDelegateMap.substract(_from, transferInfo);
-            validatorDelegateMap.add(_to, transferInfo);
+            validatorDelegateMap.substract(_from, _transferAmount);
+            validatorDelegateMap.add(_to, _transferAmount);
 
             emit ReBalance(_from, _to, _transferAmount);
         } else {
