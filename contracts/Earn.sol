@@ -180,9 +180,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Delegate CORE to PledgeAgent
          _delegate(_validator, amount);
 
-        // Update delegate records
-        validatorDelegateMap.add(_validator, amount);
-
         // Mint stCORE and send to users
         uint256 stCore = _exchangeSTCore(amount);
         ISTCore(STCORE).mint(account, stCore);
@@ -301,7 +298,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             if (!_isActive(key)) {
                 // Undelegate from inactive validator
                 _unDelegate(key, 0);
-                validatorDelegateMap.remove(key);
             }
         }
 
@@ -314,7 +310,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             if (newElectedValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(newElectedValidators[0])) {
                 uint256 delegateAmount = address(this).balance;
                 if (delegateAmount >= pledgeAgentLimit) {
-                    validatorDelegateMap.add(newElectedValidators[0], delegateAmount);
                     _delegate(newElectedValidators[0], delegateAmount);
                 }
             } else {
@@ -326,7 +321,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             if (delegateAmount >= pledgeAgentLimit) {
                 uint256 randomIndex = _randomIndex(validatorSize);
                 address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
-                validatorDelegateMap.add(randomKey, delegateAmount);
                 _delegate(randomKey, delegateAmount);
             }
         }
@@ -514,7 +508,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     // Case 1: the amount available on the validator == the amount needs to be undelegated
                     // Undelegate all the tokens from the validator
                     _unDelegate(key, amount);
-                    validatorDelegateMap.substract(key, amount);
                     amount = 0;
                     break;
                 } else if (validatorAmount > amount) {
@@ -522,7 +515,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     // Case 2: the amount available on the validator >= the amount needs to be undelegated + 1
                     // Undelegate all the tokens from the validator
                         _unDelegate(key, amount);
-                        validatorDelegateMap.substract(key, amount);
                         amount = 0;
                         break;
                     } else {
@@ -533,7 +525,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         uint256 delegatorLeftAmount = validatorAmount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && delegatorLeftAmount > pledgeAgentLimit) {
                             _unDelegate(key, delegateAmount);
-                             validatorDelegateMap.substract(key, delegateAmount);
                             amount -= delegateAmount;
                         }
                     }
@@ -542,7 +533,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         // Case 4: the amount available on the validator <= the amount needs to be undelegated - 1
                         // Clear the validator and move to the next one
                         _unDelegate(key, validatorAmount);
-                        validatorDelegateMap.substract(key, validatorAmount);
                         amount -= validatorAmount;
                     } else {
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
@@ -552,7 +542,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         uint256 accountLeftAmount = amount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && accountLeftAmount > pledgeAgentLimit) {
                             _unDelegate(key, delegateAmount);
-                            validatorDelegateMap.substract(key, delegateAmount);
                             amount -= delegateAmount;
                         }
                     }
@@ -576,16 +565,28 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     function _delegate(address validator, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).delegateCoin{value: amount}(validator);
+        // Update delegate record
+        validatorDelegateMap.add(validator, amount);
         emit Delegate(validator, amount);
     }
 
     function _unDelegate(address validator, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
+        if (amount == 0) {
+            // Remove delegate record
+            validatorDelegateMap.remove(validator);
+        } else {
+            // Update delegate record
+            validatorDelegateMap.substract(validator, amount);
+        }
         emit UnDelegate(validator, amount);
     }
 
     function _transfer(address from, address to, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).transferCoin(from, to, amount);
+        // Update delegate record
+        validatorDelegateMap.substract(from, amount);
+        validatorDelegateMap.add(to, amount);
         emit Transfer(from, to, amount);
     }
 
@@ -611,9 +612,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     function _reBalanceTransfer(address _from, address _to, uint256 _fromAmount, uint256 _transferAmount) private {
         if (_transferAmount >= pledgeAgentLimit && (_fromAmount ==_transferAmount ||  _fromAmount - _transferAmount >= pledgeAgentLimit)) {
             _transfer(_from, _to, _transferAmount);
-            validatorDelegateMap.substract(_from, _transferAmount);
-            validatorDelegateMap.add(_to, _transferAmount);
-
             emit ReBalance(_from, _to, _transferAmount);
         } else {
             revert IEarnErrors.EarnReBalanceInvalidTransferAmount(_from, _fromAmount, _transferAmount);
