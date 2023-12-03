@@ -26,7 +26,6 @@ library IterableAddressDelegateMapping {
     function add(Map storage map, address key, DelegateInfo memory val) internal {
         if (map.indexOf[key] != 0) {
             map.values[key].amount += val.amount;
-            map.values[key].earning += val.earning;
         } else {
             map.values[key] = val;
             map.keys.push(key);
@@ -37,7 +36,6 @@ library IterableAddressDelegateMapping {
     function substract(Map storage map, address key, DelegateInfo memory val) internal {
         if (map.indexOf[key] != 0) {
              map.values[key].amount -= val.amount;
-             map.values[key].earning -= val.earning;
         } else {
             map.values[key] = val;
             map.keys.push(key);

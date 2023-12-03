@@ -179,8 +179,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
         // Update delegate records
         DelegateInfo memory delegateInfo = DelegateInfo({
-            amount: amount,
-            earning: 0
+            amount: amount
         });
         validatorDelegateMap.add(_validator, delegateInfo);
 
@@ -297,28 +296,20 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // The operator can also pass in new elected validators to act as a fallback catch
     //  in the case where all existing validators are replaced in the new round
     function afterTurnRound(address[] memory newElectedValidators) external onlyOperator {
-        // Amount of CORE to undelegate from validators not active in the new round
-        uint256 unDelegateAmount;
-
         // Claim rewards
         for (uint i = validatorDelegateMap.size(); i != 0; i--) {
             address key = validatorDelegateMap.getKeyAtIndex(i - 1);
             DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
 
-            uint256 balanceBeforeClaim = address(this).balance;
+            // Claim reward from validator
             _claim(key);
-            uint256 balanceAfterClaim = address(this).balance;
-            uint256 _earning = balanceAfterClaim - balanceBeforeClaim;
-            delegateInfo.earning += _earning;
 
             // Check validator status
             if (!_isActive(key)) {
                 // Undelegate from inactive validator
                 _unDelegate(key, delegateInfo.amount);
-                unDelegateAmount += (delegateInfo.amount + delegateInfo.earning);
                 validatorDelegateMap.remove(key);
             }
-     
         }
 
         // Delegate {unDelegateAmount} to a random chosen validator
@@ -327,39 +318,29 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         uint256 validatorSize = validatorDelegateMap.size();
         if (validatorSize == 0) {
             if (newElectedValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(newElectedValidators[0])) {
-                DelegateInfo memory backupDelegateInfo = DelegateInfo({
-                    amount: 0,
-                    earning: unDelegateAmount
-                });
-                validatorDelegateMap.add(newElectedValidators[0], backupDelegateInfo);
+                if (address(this).balance >= pledgeAgentLimit) {
+                    // All balance delegate to back up validator
+                    DelegateInfo memory backupDelegateInfo = DelegateInfo({
+                        amount: address(this).balance
+                    });
+                    validatorDelegateMap.add(newElectedValidators[0], backupDelegateInfo);
+                    _delegate(newElectedValidators[0], backupDelegateInfo.amount);
+                }
             } else {
                 // should not happen
                 revert IEarnErrors.EarnValidatorsAllOffline();
             }        
         } else {
-            uint256 randomIndex = _randomIndex(validatorSize);
-            address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
-            // Add {unDelegateAmount} to the randomly chosen validator's earning
-            //  which will be used to delegate to this validator in the follow step
-            DelegateInfo memory randomDelegateInfo = DelegateInfo({
-                amount: 0,
-                earning: unDelegateAmount
-            });
-            validatorDelegateMap.add(randomKey, randomDelegateInfo);
-        }
-
-        // Delegate rewards
-        // Auto compounding
-        for (uint256 i = 0; i < validatorDelegateMap.size(); i++) {
-            address key = validatorDelegateMap.getKeyAtIndex(i);
-            DelegateInfo storage delegateInfo = validatorDelegateMap.get(key);
-
-            if(delegateInfo.earning > pledgeAgentLimit) {
-                uint256 delegateAmount = delegateInfo.earning;
-                _delegate(key, delegateAmount);
-                delegateInfo.amount += delegateAmount;
-                delegateInfo.earning -= delegateAmount;
-            } 
+            if (address(this).balance >= pledgeAgentLimit) {
+                uint256 randomIndex = _randomIndex(validatorSize);
+                address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
+                // // All balance delegate to back up validator
+                DelegateInfo memory randomDelegateInfo = DelegateInfo({
+                    amount: address(this).balance
+                });
+                validatorDelegateMap.add(randomKey, randomDelegateInfo);
+                _delegate(randomKey, randomDelegateInfo.amount);
+            }
         }
 
         uint256 currentRound = _currentRound();
@@ -450,9 +431,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         return redeemRecords[msg.sender];
     }
 
-    // @openissue change msg.sender to a passed in address
-    function getRedeemAmount() external view returns (uint256 unlockedAmount, uint256 lockedAmount) {
-        RedeemRecord[] storage records = redeemRecords[msg.sender];
+    function getRedeemAmount(address _account) external view returns (uint256 unlockedAmount, uint256 lockedAmount) {
+        RedeemRecord[] storage records = redeemRecords[_account];
         for (uint256 i = 0; i < records.length; i++) {
             RedeemRecord memory record = records[i];
              if (record.unlockTime >= block.timestamp) {
@@ -521,25 +501,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         return stCore * exchangeRates[exchangeRates.length-1] / RATE_BASE;
     }
 
-    // Delegate to validator
-    // @openissue remove unnecessary code
-    function _delegate(address validator, uint256 amount) private {
-        uint256 balanceBefore = address(this).balance - amount;
-        IPledgeAgent(PLEDGE_AGENT).delegateCoin{value: amount}(validator);
-        uint256 balanceAfter = address(this).balance;
-        uint256 earning = balanceAfter - balanceBefore;
-        if (earning > 0) {
-            // This shall not happen as all rewards are claimed in afterTurnRound()
-            // Only for unexpected cases
-            DelegateInfo memory unprocessedReward = DelegateInfo({
-                amount: 0,
-                earning: earning
-            });
-            validatorDelegateMap.add(validator, unprocessedReward);
-        }
-        emit Delegate(validator, amount);
-    }
-
     // Undelegate CORE from validators with strategy
     // There is dues protection in PledageAgent, which are
     //  1. Can only delegate 1+ CORE
@@ -568,8 +529,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     // Case 1: the amount available on the validator == the amount needs to be undelegated
                     // Undelegate all the tokens from the validator
                     DelegateInfo memory unDelegateInfo = DelegateInfo({
-                        amount: amount,
-                        earning: 0
+                        amount: amount
                     });
                     _unDelegate(key, amount);
                     amount = 0;
@@ -580,8 +540,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     // Case 2: the amount available on the validator >= the amount needs to be undelegated + 1
                     // Undelegate all the tokens from the validator
                         DelegateInfo memory unDelegateInfo = DelegateInfo({
-                            amount: amount,
-                            earning: 0
+                            amount: amount
                         });
                         _unDelegate(key, amount);
                         amount = 0;
@@ -596,8 +555,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         uint256 delegatorLeftAmount = delegateInfo.amount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && delegatorLeftAmount > pledgeAgentLimit) {
                             DelegateInfo memory unDelegateInfo = DelegateInfo({
-                                amount: delegateAmount,
-                                earning: 0
+                                amount: delegateAmount
                             });
                             _unDelegate(key, delegateAmount);
                             amount -= delegateAmount;
@@ -609,8 +567,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         // Case 4: the amount available on the validator <= the amount needs to be undelegated - 1
                         // Clear the validator and move to the next one
                         DelegateInfo memory unDelegateInfo = DelegateInfo({
-                            amount: delegateInfo.amount,
-                            earning: 0
+                            amount: delegateInfo.amount
                         });
                         _unDelegate(key, delegateInfo.amount);
                         amount -= delegateInfo.amount;
@@ -624,8 +581,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         uint256 accountLeftAmount = amount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && accountLeftAmount > pledgeAgentLimit) {
                             DelegateInfo memory unDelegateInfo = DelegateInfo({
-                                amount: delegateAmount,
-                                earning: 0
+                                amount: delegateAmount
                             });
                             _unDelegate(key, delegateAmount);
                             amount -= delegateAmount;
@@ -650,40 +606,23 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
     }
 
+    // Delegate to validator
+    function _delegate(address validator, uint256 amount) private {
+        uint256 balanceBefore = address(this).balance - amount;
+        IPledgeAgent(PLEDGE_AGENT).delegateCoin{value: amount}(validator);
+        emit Delegate(validator, amount);
+    }
+
     // Undelegate from a validator
-    // @openissue remove unnecessary code
     function _unDelegate(address validator, uint256 amount) private {
         uint256 balanceBefore = address(this).balance;
         IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
-        uint256 balanceAfter = address(this).balance - amount;
-        uint256 earning = balanceAfter - balanceBefore;
-        if (earning > 0) {
-            // This shall not happen as all rewards are claimed in afterTurnRound()
-            // Only for unexpected cases
-            DelegateInfo memory unprocessedReward = DelegateInfo({
-                amount: 0,
-                earning: earning
-            });
-            validatorDelegateMap.add(validator, unprocessedReward);
-        }
         emit UnDelegate(validator, amount);
     }
 
-    // @openissue remove unnecessary code
     function _transfer(address from, address to, uint256 amount) private {
         uint256 balanceBefore = address(this).balance;
         IPledgeAgent(PLEDGE_AGENT).transferCoin(from, to, amount);
-        uint256 balanceAfter = address(this).balance;
-        uint256 earning = balanceAfter - balanceBefore;
-        if (earning > 0) {
-            // This shall not happen as all rewards are claimed in afterTurnRound()
-            // Only for unexpected cases
-            DelegateInfo memory unprocessedReward = DelegateInfo({
-                amount: 0,
-                earning: earning
-            });
-            validatorDelegateMap.add(from, unprocessedReward);
-        }
         emit Transfer(from, to, amount);
     }
 
@@ -710,8 +649,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         if (_transferAmount >= pledgeAgentLimit && (_fromAmount ==_transferAmount ||  _fromAmount - _transferAmount >= pledgeAgentLimit)) {
             _transfer(_from, _to, _transferAmount);
             DelegateInfo memory transferInfo = DelegateInfo({
-                amount: _transferAmount,
-                earning: 0
+                amount: _transferAmount
             });
             validatorDelegateMap.substract(_from, transferInfo);
             validatorDelegateMap.add(_to, transferInfo);
