@@ -8,17 +8,17 @@ struct RedeemRecord {
     // Redeem unlock time
     uint256 unlockTime;
 
-    // Redeem amount
+    // Amount of CORE the user recieves
     uint256 amount;
 
-    // Amount of stCORE
+    // Amount of stCORE burnt 
     uint256 stCore;
 
-    // Amount of protocol fee
+    // Amount of CORE the protocol recieves
     uint256 protocolFee;
 }
 
-// Candidate copy from system contract
+// Definition from CandidateHub
 struct Candidate {
     address operateAddr;
     address consensusAddr;

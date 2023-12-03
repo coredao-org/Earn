@@ -7,10 +7,8 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract STCore is ERC20, Ownable {
-    // Contract address of EARN
     address public earn;
 
-    // Used to record whether setEarnAddress function has been called
     bool private setEarnCalled = false;
 
     event SetEarnAddress(address indexed operator, address earn);
@@ -35,7 +33,6 @@ contract STCore is ERC20, Ownable {
         _burn(account, amount);
     } 
 
-    // Only owner can modify earn address
     function setEarnAddress(address _earn) external onlyOwner calledOnce {
         if (_earn == address(0)) {
             revert ISTCoreErrors.STCoreZeroEarn(_earn);

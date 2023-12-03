@@ -18,7 +18,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 
-// TODO 2. NatSpecs
+// TODO Improve comments + NatSpecs
 
 contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable, UUPSUpgradeable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
@@ -74,14 +74,17 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     // The operator address to trigger afterTurnRound() and rebalance methods
     address public operator;
+
+    // roundTag of Core blockchain
     uint256 public roundTag;
 
     // Length limit of RedeemRecord[]
-    // A user can keep up to {lastOperateRound} redeem records
+    // A user can keep up to {redeemCountLimit} redeem records
     // This is introduced to avoid gas issue when users withdraw CORE from this contract
     uint256 public redeemCountLimit = 100;
 
     // Query limit of exchangeRates
+    // A caller can query at most {exchangeRateQueryLimit} rounds 
     uint256 public exchangeRateQueryLimit = 365;
 
     // The amount of CORE which are requested for redumption but not yet undelegated from PledgeAgent
@@ -151,7 +154,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     modifier afterSettled() {
-        require(roundTag == _currentRound(), "Turn round not triggered");
+        require(roundTag == _currentRound(), "Turn round not executed");
         _;
     }
 
@@ -164,7 +167,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     // Mint stCORE using CORE 
     // The caller needs to pass in the validator address to delegate to
-    // By doing so we treat existing validators/new comers equally
+    // By doing so Earn treats existing validators/new comers equally
     function mint(address _validator) external payable afterSettled nonReentrant whenNotPaused canDelegate(_validator) {
         address account = msg.sender;
         uint256 amount = msg.value;
@@ -260,12 +263,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Undelegate CORE from validators
         _unDelegateWithStrategy(totalAmount);
 
-        // Check contract balance
-        // This shall not happen, just a sanity check
-        if (address(this).balance < totalAmount) {
-            revert IEarnErrors.EarnInsufficientBalance(address(this).balance, totalAmount);
-        }
-
         // Transfer CORE to user
         payable(account).sendValue(accountAmount);
 
@@ -282,16 +279,16 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     /// --- OPERATOR INTERACTIONS --- ///
 
-    // Triggered right after turn round
+    // Triggered right after Core blockchain turns to a new round
     // Users are not allowed to operate before this method is executed successfully in each round
     // The Earn contract does following in this method
     //  1. Claim rewards from each validator
-    //  2. Stake rewards back to corresponding validators (auto compounding)
+    //  2. Stake rewards back to one randomly chosen active validator (auto compounding)
     //  3. Update daily exchange rate
-    // During the process, this method also moves delegates from inactive validators 
-    //  to active (newly elected) validators
+    // During the process, this method also undelegates from inactive validators 
     // The operator can also pass in new elected validators to act as a fallback catch
     //  in the case where all existing validators are replaced in the new round
+    // The parameter type is set to address[] instead of address for forward compatibilities
     function afterTurnRound(address[] memory newElectedValidators) external onlyOperator {
         // Claim rewards
         for (uint i = validatorDelegateMap.size(); i != 0; i--) {
@@ -308,7 +305,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             }
         }
 
-        // Delegate {unDelegateAmount} to a random chosen validator
+        // Delegate all claimed rewards + undelegate amounts from 
+        //  inactive validators to a random chosen validator
         // If all validators staked by Earn in last round become inactive
         //  choose the first validator in the passed in array
         uint256 validatorSize = validatorDelegateMap.size();
@@ -316,7 +314,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             if (newElectedValidators.length > 0 && ICandidateHub(CANDIDATE_HUB).canDelegate(newElectedValidators[0])) {
                 uint256 delegateAmount = address(this).balance;
                 if (delegateAmount >= pledgeAgentLimit) {
-                    // All balance delegate to back up validator
                     validatorDelegateMap.add(newElectedValidators[0], delegateAmount);
                     _delegate(newElectedValidators[0], delegateAmount);
                 }
@@ -326,10 +323,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             }        
         } else {
             uint256 delegateAmount = address(this).balance;
-            if (delegateAmount>= pledgeAgentLimit) {
+            if (delegateAmount >= pledgeAgentLimit) {
                 uint256 randomIndex = _randomIndex(validatorSize);
                 address randomKey = validatorDelegateMap.getKeyAtIndex(randomIndex);
-                // // All balance delegate to back up validator
                 validatorDelegateMap.add(randomKey, delegateAmount);
                 _delegate(randomKey, delegateAmount);
             }
@@ -368,7 +364,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         address key = validatorDelegateMap.getKeyAtIndex(0);
         uint256 initDelegateAmount = validatorDelegateMap.get(key);
 
-        // Find max and min delegate amount of validator
+        // Find max and min delegate amounts in all validators
         uint256 max = initDelegateAmount;
         address maxValidator = key;
         uint256 min = initDelegateAmount;
@@ -396,7 +392,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         // Transfer CORE to rebalance
         uint256 transferAmount = (max - min) / 2;
 
-        // Call transfer logic
         _reBalanceTransfer(maxValidator, minValidator, max, transferAmount);
     }
 
@@ -414,13 +409,12 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             revert IEarnErrors.EarnReBalanceInsufficientAmount(_from, fromValidatorAmount, _transferAmount);
         }
         
-        // Call transfer logic
         _reBalanceTransfer(_from, _to, fromValidatorAmount, _transferAmount);
     }
 
     /// --- VIEW METHODS ---///
-    function getRedeemRecords() external view returns (RedeemRecord[] memory) {
-        return redeemRecords[msg.sender];
+    function getRedeemRecords(address _account) external view returns (RedeemRecord[] memory) {
+        return redeemRecords[_account];
     }
 
     function getRedeemAmount(address _account) external view returns (uint256 unlockedAmount, uint256 lockedAmount) {
@@ -436,7 +430,6 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     }
 
     function getExchangeRates(uint256 target) external view returns(uint256[] memory _exchangeRates) {
-        // Not allow to query too many rounds
         if (target > exchangeRateQueryLimit) {
             return _exchangeRates;
         }
@@ -496,9 +489,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // There is dues protection in PledageAgent, which are
     //  1. Can only delegate 1+ CORE
     //  2. Can only undelegate 1+ CORE AND can only leave 1+ CORE on validator after undelegate 
-    // Internally, Earn delegates to/undelegates from validators on each mint/redeem action
-    // As a result, to make the system solid. For any undelegate action from Earn it must result in
-    //  1. The validator must be cleared or have 1+ CORE remaining after undelegate AND
+    // Internally, Earn delegates/undelegates on validators for each mint/redeem action
+    // As a result, to make the system solid. Any undelegate action on a validator from Earn must result in
+    //  1. The validator must be cleared or have 1+ CORE remaining after undelegate 
+    //     AND
     //  2. Earn contract must have 0 or 1+ CORE left to further undelegate
     // Otherwise, Earn might fail to undelegate further because of the dues protection from PledgeAgent
     function _unDelegateWithStrategy(uint256 amount) private {
@@ -534,8 +528,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     } else {
                         // Case 3: the amount available on the validator >= the amount needs to be undelegated AND
                         //          the amount available on the validator <= the amount needs to be undelegated + 1
-                        // In this case we need to make sure there are 1 CORE token left to further undelegate so both 
-                        //   the validator and Earn are safe on the PledgeAgent dues protection
+                        // In this case we need to make sure there are 1 CORE token left to further undelegate 
                         uint256 delegateAmount = amount - pledgeAgentLimit;
                         uint256 delegatorLeftAmount = validatorAmount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && delegatorLeftAmount > pledgeAgentLimit) {
@@ -554,8 +547,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                     } else {
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
                         //          the amount available on the validator <= the amount needs to be undelegated
-                        // In this case we need to make sure there are 1 CORE token left on validator so both 
-                        //   the validator and Earn are safe on the PledgeAgent dues protection
+                        // In this case we need to make sure there are 1 CORE token left on validator 
                         uint256 delegateAmount = validatorAmount - pledgeAgentLimit;
                         uint256 accountLeftAmount = amount - delegateAmount;
                         if (delegateAmount > pledgeAgentLimit && accountLeftAmount > pledgeAgentLimit) {
@@ -582,13 +574,11 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
     }
 
-    // Delegate to validator
     function _delegate(address validator, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).delegateCoin{value: amount}(validator);
         emit Delegate(validator, amount);
     }
 
-    // Undelegate from a validator
     function _unDelegate(address validator, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
         emit UnDelegate(validator, amount);
