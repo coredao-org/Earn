@@ -52,24 +52,24 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
 
     // Redemption period
     // It takes {lockDay} days for users to get CORE back from Earn after requesting redeem
-    uint256 public lockDay = 7;
+    uint256 public lockDay;
 
     // Redeem records are saved for each user
     // The records been withdrawn are removed to improve iteration performance
     mapping(address => RedeemRecord[]) public redeemRecords;
 
     // The threshold to tigger rebalance
-    uint256 public balanceThreshold = 10000 ether;
+    uint256 public balanceThreshold;
 
     // Dues protections
-    uint256 public mintMinLimit = 1 ether;
-    uint256 public redeemMinLimit = 1 ether;
-    uint256 public pledgeAgentLimit = 1 ether;
+    uint256 public mintMinLimit;
+    uint256 public redeemMinLimit;
+    uint256 public pledgeAgentLimit;
 
     // Protocol fee percents and fee receiving address
     // Set 0 ~ 1000000
     // 1000000 = 100%
-    uint256 public protocolFeePoints = 0;
+    uint256 public protocolFeePoints;
     address public protocolFeeReceiver;
 
     // The operator address to trigger afterTurnRound() and rebalance methods
@@ -81,14 +81,14 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     // Length limit of RedeemRecord[]
     // A user can keep up to {redeemCountLimit} redeem records
     // This is introduced to avoid gas issue when users withdraw CORE from this contract
-    uint256 public redeemCountLimit = 100;
+    uint256 public redeemCountLimit;
 
     // Query limit of exchangeRates
     // A caller can query at most {exchangeRateQueryLimit} rounds 
-    uint256 public exchangeRateQueryLimit = 365;
+    uint256 public exchangeRateQueryLimit;
 
     // The amount of CORE which are requested for redumption but not yet undelegated from PledgeAgent
-    uint256 public toWithdrawAmount = 0;
+    uint256 public toWithdrawAmount;
 
     /// --- EVENTS --- ///
 
@@ -140,8 +140,18 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
         operator = _operator;
 
+        // Initialize field
         exchangeRates.push(RATE_BASE);
         roundTag = _currentRound();
+        lockDay = 7;
+        balanceThreshold = 10000 ether;
+        mintMinLimit = 1 ether;
+        redeemMinLimit = 1 ether;
+        pledgeAgentLimit = 1 ether;
+        protocolFeePoints = 0;
+        redeemCountLimit = 100;
+        exchangeRateQueryLimit = 365;
+        toWithdrawAmount = 0;
     }
 
     function _authorizeUpgrade(address newImplementation) internal onlyOwner override {}
