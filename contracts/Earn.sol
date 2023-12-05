@@ -140,7 +140,7 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         }
         operator = _operator;
 
-        // Initialize field
+        // Initialize fields
         exchangeRates.push(RATE_BASE);
         roundTag = _currentRound();
         lockDay = 7;
@@ -311,8 +311,8 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
             }
         }
 
-        // Delegate all claimed rewards + undelegate amounts from 
-        //  inactive validators to a random chosen validator
+        // Delegate all claimed rewards + undelegate amounts from inactive validators 
+        //  to a random chosen validator
         // If all validators staked by Earn in last round become inactive
         //  choose the first validator in the passed in array
         uint256 validatorSize = validatorDelegateMap.size();
@@ -531,11 +531,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         // Case 3: the amount available on the validator >= the amount needs to be undelegated AND
                         //          the amount available on the validator <= the amount needs to be undelegated + 1
                         // In this case we need to make sure there are 1 CORE token left to further undelegate 
-                        uint256 delegateAmount = amount - pledgeAgentLimit;
-                        uint256 delegatorLeftAmount = validatorAmount - delegateAmount;
-                        if (delegateAmount > pledgeAgentLimit && delegatorLeftAmount > pledgeAgentLimit) {
-                            _unDelegate(key, delegateAmount);
-                            amount -= delegateAmount;
+                        uint256 undelegateAmount = amount - pledgeAgentLimit;
+                        if (undelegateAmount > pledgeAgentLimit) {
+                            _unDelegate(key, undelegateAmount);
+                            amount -= undelegateAmount;
                         }
                     }
                 } else {
@@ -548,11 +547,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
                         // Case 5: the amount available on the validator >= the amount needs to be undelegated - 1 AND
                         //          the amount available on the validator <= the amount needs to be undelegated
                         // In this case we need to make sure there are 1 CORE token left on validator 
-                        uint256 delegateAmount = validatorAmount - pledgeAgentLimit;
-                        uint256 accountLeftAmount = amount - delegateAmount;
-                        if (delegateAmount > pledgeAgentLimit && accountLeftAmount > pledgeAgentLimit) {
-                            _unDelegate(key, delegateAmount);
-                            amount -= delegateAmount;
+                        uint256 undelegateAmount = validatorAmount - pledgeAgentLimit;
+                        if (undelegateAmount > pledgeAgentLimit) {
+                            _unDelegate(key, undelegateAmount);
+                            amount -= undelegateAmount;
                         }
                     }
                 }
