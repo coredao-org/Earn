@@ -1,10 +1,10 @@
 {
-  "name": "earn",
+  "name": "brownie",
   "version": "1.0.0",
-  "description": "ecology project for staking",
+  "description": "earn test project using brownie",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \\\"Error: no tests specified\\\" && exit 1"
   },
   "repository": {
     "type": "git",
@@ -16,12 +16,11 @@
     "url": "https://github.com/coredao-org/Earn/issues"
   },
   "homepage": "https://github.com/coredao-org/Earn#readme",
-  "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^3.0.0",
-    "hardhat": "^2.19.1"
-  },
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.3",
-    "@openzeppelin/contracts-upgradeable": "^4.9.3"
+    "@openzeppelin/contracts-upgradeable": "^4.9.3",
+    "nunjucks": "^3.2.4",
+    "rlp": "^3.0.0",
+    "web3": "^4.3.0"
   }
 }

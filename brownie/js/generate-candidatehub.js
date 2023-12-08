@@ -2,29 +2,35 @@ const program = require("commander");
 const fs = require("fs");
 const nunjucks = require("nunjucks");
 
+const init_cycle = require("./init_cycle")
+
 program.version("0.0.1");
 program.option(
     "-t, --template <template>",
-    "system template file",
-    "./contracts/contracts/System.template"
+    "CandidateHub template file",
+    "./contracts/system_contracts/CandidateHub.template"
 );
 
 program.option(
     "-o, --output <output-file>",
-    "System.sol",
-    "./contracts/contracts/System.sol"
+    "CandidateHub.sol",
+    "./contracts/system_contracts/CandidateHub.sol"
 )
 
 program.option("--mock <mock>",
     "if use mock",
     false);
 
+
 program.parse(process.argv);
 
 const data = {
+  initRoundInterval: init_cycle.roundInterval,
+  initValidatorCount: init_cycle.validatorCount,
   mock: program.mock,
 };
+
 const templateString = fs.readFileSync(program.template).toString();
 const resultString = nunjucks.renderString(templateString, data);
 fs.writeFileSync(program.output, resultString);
-console.log("System file updated.");
+console.log("CandidateHub file updated.");

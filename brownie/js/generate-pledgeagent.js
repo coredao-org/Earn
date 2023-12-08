@@ -8,13 +8,13 @@ program.version("0.0.1");
 program.option(
     "-t, --template <template>",
     "PledgeAgent template file",
-    "./contracts/contracts/PledgeAgent.template"
+    "./contracts/system_contracts/PledgeAgent.template"
 );
 
 program.option(
     "-o, --output <output-file>",
     "PledgeAgent.sol",
-    "./contracts/contracts/PledgeAgent.sol"
+    "./contracts/system_contracts/PledgeAgent.sol"
 )
 
 program.option("--mock <mock>",

@@ -6,13 +6,13 @@ program.version("0.0.1");
 program.option(
     "-t, --template <template>",
     "SlashIndicator template file",
-    "./contracts/contracts/SlashIndicator.template"
+    "./contracts/system_contracts/SlashIndicator.template"
 );
 
 program.option(
     "-o, --output <output-file>",
     "SlashIndicator.sol",
-    "./contracts/contracts/SlashIndicator.sol"
+    "./contracts/system_contracts/SlashIndicator.sol"
 )
 program.option("--mock <mock>",
     "if use mock",

@@ -16,8 +16,12 @@ artifacts/
 .deps/
 build/
 .idea
-# test
+### test
+reports
 .pytest_cache
-reports/
-test/__pycache__/
-contracts/contracts
+__pycache__
+brownie/contracts/interface
+brownie/contracts/lib
+brownie/contracts/system_contracts
+brownie/contracts/*.sol
+brownie/interfaces
