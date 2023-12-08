@@ -8,13 +8,13 @@ program.version("0.0.1");
 program.option(
     "-t, --template <template>",
     "BtcLightClient template file",
-    "./contracts/contracts/BtcLightClient.template"
+    "./contracts/system_contracts/BtcLightClient.template"
 );
 
 program.option(
     "-o, --output <output-file>",
     "BtcLightClient.sol",
-    "./contracts/contracts/BtcLightClient.sol"
+    "./contracts/system_contracts/BtcLightClient.sol"
 )
 
 program.option("--rewardForValidatorSetChange <rewardForValidatorSetChange>",

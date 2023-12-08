@@ -7,13 +7,13 @@ program.version("0.0.1");
 program.option(
     "-t, --template <template>",
     "validatorSet template file",
-    "./contracts/contracts/ValidatorSet.template"
+    "./contracts/system_contracts/ValidatorSet.template"
 );
 
 program.option(
     "-o, --output <output-file>",
     "ValidatorSet.sol",
-    "./contracts/contracts/ValidatorSet.sol"
+    "./contracts/system_contracts/ValidatorSet.sol"
 )
 
 program.option(
