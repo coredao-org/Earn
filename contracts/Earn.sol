@@ -116,6 +116,10 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
     event UpdateRedeemCountLimit(address indexed caller, uint256 redeemCountLimit);
     event UpdateExchangeRateQueryLimit(address indexed caller, uint256 exchangeRateQueryLimit);
 
+    constructor() {
+        _disableInitializers();
+    }
+
     function initialize(address _stCore, address _protocolFeeReceiver, address _operator) external initializer {
         __Ownable_init();
         __UUPSUpgradeable_init();
