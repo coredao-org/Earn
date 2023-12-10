@@ -1,5 +1,6 @@
 import pytest
 from brownie import *
+from .utils import *
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -104,11 +105,14 @@ def stcore(accounts):
 @pytest.fixture(scope="module")
 def earn(accounts, lib_set_up, stcore, candidate_hub):
     c = EarnMock.deploy({"from": accounts[0]})
-    stcore.setEarnAddress(c.address)
-    c.initialize(stcore.address, accounts[-2].address, accounts[0].address)
+    raw_data = transaction_raw_data('initialize(address,address,address)', ['address', 'address', 'address'],
+                                    [stcore.address, accounts[-2].address, accounts[0].address])
+    proxy = EarnProxy.deploy(c, raw_data, {"from": accounts[0]})
+    earn_proxy = Contract.from_abi('earn_proxy', proxy.address, c.abi)
+    stcore.setEarnAddress(earn_proxy.address)
     if is_development:
-        c.developmentInit()
-    return c
+        earn_proxy.developmentInit({'from': accounts[0]})
+    return earn_proxy
 
 
 @pytest.fixture(scope="module")
@@ -160,8 +164,3 @@ def set_system_contract_address(
     foundation.updateContractAddr(*args)
 
     system_reward.init()
-
-
-@pytest.fixture(scope="module")
-def min_init_delegate_value(pledge_agent):
-    return pledge_agent.requiredCoinDeposit()
