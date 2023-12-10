@@ -3,6 +3,7 @@ pragma solidity 0.8.4;
 
 interface IEarnErrors {
     error EarnZeroSTCore(address stCORE);
+    error EarnTransferAmountProhibit(address sender);
 
     // operator related errors
     error EarnZeroOperator(address operator);

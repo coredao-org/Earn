@@ -716,5 +716,9 @@ contract Earn is Initializable, OwnableUpgradeable, ReentrancyGuardUpgradeable, 
         _unpause();
     }
 
-    receive() external payable {}
+    receive() external payable {
+        if (msg.sender != PLEDGE_AGENT) {
+            revert IEarnErrors.EarnTransferAmountProhibit(msg.sender);
+        }
+    }
 }
