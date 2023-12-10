@@ -1,11 +1,15 @@
 import time
-from brownie import accounts, Wei
-from .common import get_exchangerate
+from brownie import accounts, Wei, TestEarnProxy, UpgradeEarn, Contract, EarnProxy, WithdrawReentry
+from brownie.test import given, strategy
+from hypothesis import settings
+from .common import get_exchangerate, get_current_round
 import brownie
 import pytest
 from web3 import Web3
 from .common import register_candidate, turn_round
-from .utils import get_tracker, expect_event, expect_query, encode_args_with_signature, expect_event_not_emitted
+from .utils import get_tracker, expect_event, expect_query, encode_args_with_signature, expect_event_not_emitted, \
+    transaction_raw_data
+from decimal import Decimal, getcontext
 
 MIN_DELEGATE_VALUE = Wei(10000)
 RATE_MULTIPLE = 1000000
@@ -13,6 +17,7 @@ BLOCK_REWARD = 0
 PLEDGE_LIMIT = 0
 ONE_ETHER = Web3.toWei(1, 'ether')
 TX_FEE = 100
+getcontext().prec = 100
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -27,6 +32,7 @@ def set_block_reward(validator_set):
     block_reward_incentive_percent = validator_set.blockRewardIncentivePercent()
     total_block_reward = block_reward + TX_FEE
     BLOCK_REWARD = int(total_block_reward * (100 - block_reward_incentive_percent) / 100)
+    accounts.default = accounts[0]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -34,8 +40,12 @@ def set_agent_pledge_contract_address(candidate_hub, earn, pledge_agent, validat
     round_time_tag = 7
     candidate_hub.setControlRoundTimeTag(True)
     candidate_hub.setRoundTag(round_time_tag)
-    earn.setContractAddress(candidate_hub.address, pledge_agent.address, candidate_hub.getRoundTag())
-    earn.updateOperator(accounts[0].address)
+    earn.setContractAddress(candidate_hub.address, pledge_agent.address, candidate_hub.getRoundTag(),
+                            {'from': accounts[0]})
+    earn.updateOperator(accounts[0].address, {'from': accounts[0]})
+    earn.setAfterTurnRoundClaimReward(True, {'from': accounts[0]})
+    earn.setUnDelegateValidatorState(True, {'from': accounts[0]})
+    earn.setDayInterval(INIT_DAY_INTERVAL, {'from': accounts[0]})
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -48,7 +58,7 @@ def init_contracts_variable():
 
 @pytest.fixture()
 def update_lock_time(earn):
-    earn.setInitDayInterval(0)
+    earn.setDayInterval(0)
     earn.setReduceTime(10)
 
 
@@ -1068,7 +1078,7 @@ def test_partial_withdraw_success(earn, update_lock_time):
     token_value = MIN_DELEGATE_VALUE * 3 // 5
     earn.redeem(token_value)
     earn.redeem(token_value + 1)
-    earn.setInitDayInterval(2)
+    earn.setDayInterval(2)
     earn.redeem(token_value + 2)
     earn.redeem(token_value + 3)
     redeem_record = earn.getRedeemRecords(accounts[0])
@@ -1462,7 +1472,7 @@ def test_withdraw_multiple_fee_vouchers(earn, update_lock_time):
     earn.redeem(PLEDGE_LIMIT)
     protocol_fee = 200000
     earn.updateProtocolFeePoints(protocol_fee)
-    earn.updateProtocolFeeReveiver(accounts[1])
+    earn.updateProtocolFeeReceiver(accounts[1])
     earn.redeem(PLEDGE_LIMIT)
     earn.redeem(PLEDGE_LIMIT)
     earn.redeem(PLEDGE_LIMIT)
@@ -1480,7 +1490,7 @@ def test_withdraw_multiple_redeems_with_fees(earn, update_lock_time):
         consensuses.append(register_candidate(operator=operator))
     protocol_fee = 200000
     earn.updateProtocolFeePoints(protocol_fee)
-    earn.updateProtocolFeeReveiver(accounts[1])
+    earn.updateProtocolFeeReceiver(accounts[1])
     redeem_amount = PLEDGE_LIMIT * 5
     turn_round()
     earn.mint(operators[0], {'value': PLEDGE_LIMIT * 3})
@@ -1504,7 +1514,7 @@ def test_unlocked_amount_deducted_proportionally(earn, update_lock_time):
         consensuses.append(register_candidate(operator=operator))
     protocol_fee = 200000
     earn.updateProtocolFeePoints(protocol_fee)
-    earn.updateProtocolFeeReveiver(accounts[1])
+    earn.updateProtocolFeeReceiver(accounts[1])
     redeem_amount = PLEDGE_LIMIT * 5
     turn_round()
     earn.mint(operators[0], {'value': PLEDGE_LIMIT * 3})
@@ -1531,7 +1541,7 @@ def test_unlocked_amount_protocol_success(earn, update_lock_time):
         consensuses.append(register_candidate(operator=operator))
     protocol_fee = 200000
     earn.updateProtocolFeePoints(protocol_fee)
-    earn.updateProtocolFeeReveiver(accounts[1])
+    earn.updateProtocolFeeReceiver(accounts[1])
     redeem_amount = MIN_DELEGATE_VALUE
     turn_round()
     earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE})
@@ -2298,3 +2308,549 @@ def test_withdraw_low_exchange_rate(earn, stcore, validator_set, update_lock_tim
     earn.withdraw()
     total_pledge = mint_amount - MIN_DELEGATE_VALUE
     assert tracker0.delta() == total_pledge
+
+
+def test_pause_in_withdraw(earn, update_lock_time):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:6]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    mint_amount = MIN_DELEGATE_VALUE * 10
+    earn.pause()
+    with brownie.reverts("Pausable: paused"):
+        earn.mint(operators[0], {'value': mint_amount})
+    earn.unpause()
+    earn.mint(operators[0], {'value': mint_amount})
+    turn_round(consensuses, round_count=2, trigger=True)
+    redeem_amount = mint_amount
+    earn.pause()
+    with brownie.reverts("Pausable: paused"):
+        earn.redeem(redeem_amount)
+    earn.unpause()
+    earn.redeem(redeem_amount)
+    tracker0 = get_tracker(accounts[0])
+    earn.pause()
+    earn.withdraw()
+    earn.unpause()
+    assert tracker0.delta() == BLOCK_REWARD // 2 + redeem_amount
+
+
+def test_pause_and_unpause(earn, update_lock_time):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:4]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.pause()
+    with brownie.reverts("Pausable: paused"):
+        earn.mint(operators[0], {'value': PLEDGE_LIMIT})
+    with brownie.reverts("Pausable: paused"):
+        earn.redeem(PLEDGE_LIMIT)
+    error_msg = encode_args_with_signature("EarnEmptyRedeemRecord()", [])
+    with brownie.reverts(f"typed error: {error_msg}"):
+        earn.withdraw()
+    earn.unpause()
+    earn.mint(operators[0], {'value': PLEDGE_LIMIT})
+    earn.redeem(PLEDGE_LIMIT)
+    tracker0 = get_tracker(accounts[0])
+    earn.withdraw()
+    assert tracker0.delta() == PLEDGE_LIMIT
+
+
+def test_turn_round_failure_scenarios(earn, candidate_hub, update_lock_time):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    candidate_hub.turnRound()
+    assert earn.roundTag() != get_current_round()
+    with brownie.reverts("Turn round not executed"):
+        earn.mint(operators[0], {'value': PLEDGE_LIMIT})
+    with brownie.reverts("Turn round not executed"):
+        earn.redeem(PLEDGE_LIMIT)
+    with brownie.reverts("Turn round not executed"):
+        earn.reBalance()
+    with brownie.reverts("Turn round not executed"):
+        earn.manualReBalance(operators[0], operators[1], PLEDGE_LIMIT)
+    with brownie.reverts("Turn round not executed"):
+        earn.withdraw()
+    error_msg = encode_args_with_signature("EarnValidatorsAllOffline()", [])
+    with brownie.reverts(f"typed error: {error_msg}"):
+        earn.afterTurnRound([])
+    earn.afterTurnRound([operators[1]])
+    assert earn.roundTag() == get_current_round()
+    tx = earn.mint(operators[0], {'value': PLEDGE_LIMIT})
+    assert 'Mint' in tx.events
+
+
+def test_delegate_investment(earn, update_lock_time):
+    earn_proxy = WithdrawReentry.deploy(earn.address, {'from': accounts[0]})
+    operators = []
+    consensuses = []
+    for operator in accounts[3:4]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    tx0 = earn_proxy.proxyMint(operators[0], {'value': MIN_DELEGATE_VALUE})
+    tx1 = earn_proxy.proxyRedeem(MIN_DELEGATE_VALUE)
+    tx2 = earn_proxy.proxyWithdraw()
+    assert tx0.events['tMint']['success'] == tx1.events['tRedeem']['success'] == tx2.events['tWithdraw'][
+        'success'] == True
+    assert earn_proxy.balance() == MIN_DELEGATE_VALUE
+
+
+def test_not_operator(earn):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:4]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.updateOperator(accounts[2].address)
+    earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE})
+    turn_round(consensuses)
+    with brownie.reverts('Not operator'):
+        earn.afterTurnRound([])
+
+
+def test_after_turn_round_undelegate_with_zero_balance(earn, candidate_hub, update_lock_time):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE})
+    earn.redeem(MIN_DELEGATE_VALUE)
+    earn.withdraw()
+    candidate_hub.refuseDelegate({'from': operators[0]})
+    turn_round(consensuses)
+    earn.afterTurnRound([operators[1]])
+    assert earn.getValidatorDelegateMapLength() == 0
+
+
+def test_withdraw_rewards_when_not_paused(earn, candidate_hub, update_lock_time):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE})
+    turn_round(consensuses, trigger=True)
+    earn.pause()
+    tx = turn_round(consensuses, trigger=True)
+    assert 'claimedReward' in tx.events
+
+
+def test_re_balance_delegate_rejects_delegate(earn, candidate_hub, stcore):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE, 'from': accounts[0]})
+    earn.mint(operators[1], {'value': MIN_DELEGATE_VALUE // 2, 'from': accounts[0]})
+    candidate_hub.refuseDelegate({'from': operators[1]})
+    error_msg = encode_args_with_signature("InactiveAgent(address)",
+                                           [str(operators[1])])
+    with brownie.reverts(f"typed error: {error_msg}"):
+        earn.reBalance({'from': accounts[0]})
+    turn_round(consensuses, trigger=True)
+    error_msg = encode_args_with_signature("EarnEmptyValidator()", [])
+    with brownie.reverts(f"typed error: {error_msg}"):
+        earn.reBalance({'from': accounts[0]})
+
+
+def test_mint_to_candidate_address(earn, pledge_agent, validator_set, candidate_hub):
+    candidate_hub.setValidatorCount(0)
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    tx = earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE, 'from': accounts[0]})
+    assert 'Mint' in tx.events
+
+
+def test_contract_receiving_payments(earn, pledge_agent, candidate_hub):
+    mint_amount = 10000
+    error_msg = encode_args_with_signature("EarnTransferAmountProhibit(address)", [accounts[0].address])
+    with brownie.reverts(f"typed error: {error_msg}"):
+        accounts[0].transfer(earn, mint_amount)
+    earn.setContractAddress(candidate_hub.address, accounts[0].address, 7)
+    accounts[0].transfer(earn, mint_amount)
+    assert earn.balance() == mint_amount
+
+
+def test_withdraw_when_paused(earn, pledge_agent, candidate_hub, update_lock_time):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE, 'from': accounts[0]})
+    earn.redeem(MIN_DELEGATE_VALUE // 2)
+    earn.pause()
+    with brownie.reverts('Pausable: paused'):
+        earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE, 'from': accounts[0]})
+    tx = earn.withdraw()
+    assert 'Withdraw' in tx.events
+
+
+def test_redeem_too_many_vouchers_failed(earn, candidate_hub, stcore, update_lock_time):
+    redeem_count = 1
+    earn.updateRedeemCountLimit(redeem_count)
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE, 'from': accounts[0]})
+    token_value = MIN_DELEGATE_VALUE // 3
+    earn.redeem(token_value)
+    error_msg = encode_args_with_signature("EarnRedeemCountOverLimit(address,uint256,uint256)",
+                                           [accounts[0].address, redeem_count, redeem_count])
+    with brownie.reverts(f"typed error: {error_msg}"):
+        earn.redeem(token_value)
+    earn.withdraw()
+    assert len(earn.getRedeemRecords(accounts[0])) == 0
+    earn.redeem(token_value)
+    assert len(earn.getRedeemRecords(accounts[0])) == 1
+
+
+def test_contract_upgrade_successful(earn, stcore, candidate_hub):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE, 'from': accounts[0]})
+    turn_round(consensuses, round_count=2, trigger=True)
+    rate = (MIN_DELEGATE_VALUE + BLOCK_REWARD // 2) * RATE_MULTIPLE // MIN_DELEGATE_VALUE
+    assert earn.getCurrentExchangeRate() == rate
+    validator_delegate = earn.getValidatorDelegate(operators[0])
+    assert validator_delegate == MIN_DELEGATE_VALUE + BLOCK_REWARD // 2
+    upgrade_status = None
+    try:
+        earn.upgradeEarn()
+        earn.setUpgradeEarn(False)
+    except AttributeError:
+        upgrade_status = True
+    assert upgrade_status is True
+    upgrade_earn = UpgradeEarn.deploy({'from': accounts[0]})
+    earn.upgradeTo(upgrade_earn.address)
+    upgrade_earn = Contract.from_abi('upgrade_earn', earn.address, upgrade_earn.abi)
+    upgrade_earn.setUpgradeEarn(True)
+    assert upgrade_earn.upgradeEarn() is True
+    assert upgrade_earn.getUpgradeNumber() == 0
+    assert upgrade_earn.getCurrentExchangeRate() == rate
+    validator_delegate = earn.getValidatorDelegate(operators[0])
+    assert validator_delegate == MIN_DELEGATE_VALUE + BLOCK_REWARD // 2
+
+
+def test_update_successful(earn):
+    update_value = 100000
+    earn.updateBalanceThreshold(update_value)
+    earn.updateMintMinLimit(update_value)
+    earn.updateRedeemMinLimit(update_value)
+    earn.updatePledgeAgentLimit(update_value)
+    earn.updateLockDay(update_value)
+    earn.updateProtocolFeePoints(update_value)
+    earn.updateProtocolFeeReceiver(accounts[0])
+    earn.updateOperator(accounts[0])
+    earn.updateExchangeRateQueryLimit(update_value)
+    earn.updateRedeemCountLimit(update_value)
+    assert (earn.balanceThreshold() == earn.mintMinLimit() ==
+            earn.redeemMinLimit() == earn.pledgeAgentLimit()
+            == earn.lockDay() == earn.protocolFeePoints() ==
+            earn.redeemCountLimit() == earn.exchangeRateQueryLimit() == update_value)
+    assert earn.operator() == earn.protocolFeeReceiver() == accounts[0]
+
+
+def test_query_specific_record(earn):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.mint(operators[0], {'value': MIN_DELEGATE_VALUE, 'from': accounts[0]})
+    earn.mint(operators[1], {'value': MIN_DELEGATE_VALUE, 'from': accounts[0]})
+    turn_round(consensuses, round_count=5, trigger=True)
+    assert earn.getTotalDelegateAmount() == MIN_DELEGATE_VALUE * 2 + BLOCK_REWARD * 4
+    query_limit = 3
+    earn.updateExchangeRateQueryLimit(query_limit)
+    assert len(earn.getExchangeRates(query_limit + 1)) == 0
+    query_limit = 365
+    earn.updateExchangeRateQueryLimit(query_limit)
+    assert len(earn.getExchangeRates(query_limit - 1)) == 6
+    earn.redeem(MIN_DELEGATE_VALUE // 2)
+    earn.setDayInterval(0)
+    earn.setReduceTime(10)
+    earn.redeem(MIN_DELEGATE_VALUE // 4)
+    redeem_amount = earn.getRedeemAmount(accounts[0])
+    withdraw_amount = MIN_DELEGATE_VALUE * get_exchangerate() // RATE_MULTIPLE
+    assert redeem_amount['lockedAmount'] == withdraw_amount // 2
+    assert redeem_amount['unlockedAmount'] == withdraw_amount // 4
+
+
+def test_random_validator_undelegate_successful(earn, update_lock_time):
+    operators = []
+    consensuses = []
+    for operator in accounts[5:9]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round(consensuses, round_count=2)
+    redeem_amount = MIN_DELEGATE_VALUE // 2
+    validator_delegate = []
+    for i in range(len(operators)):
+        earn.mint(operators[i], {'value': MIN_DELEGATE_VALUE, 'from': accounts[i]})
+        validator_delegate.append(MIN_DELEGATE_VALUE)
+    length = int(earn.getValidatorDelegateMapLength())
+    for i in range(length):
+        earn.redeem(redeem_amount, {'from': accounts[i]})
+        index = earn.testRandomIndex(length, {'from': accounts[i]})
+        validator_delegate[index] = validator_delegate[index] - redeem_amount
+        earn.withdraw({'from': accounts[i]})
+        assert earn.getValidatorDelegate(operators[index]) == validator_delegate[index]
+
+
+def test_reentry_withdraw(earn, update_lock_time):
+    earn_proxy = WithdrawReentry.deploy(earn.address, {'from': accounts[0]})
+    operators = []
+    consensuses = []
+    for operator in accounts[3:4]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn_proxy.proxyMint(operators[0], {'value': MIN_DELEGATE_VALUE})
+    earn_proxy.proxyRedeem(MIN_DELEGATE_VALUE)
+    earn_proxy.setReentry(True)
+    tx2 = earn_proxy.proxyWithdraw()
+    error_msg = str(tx2.events['tWithdraw']['returnData'])
+    error_data_bytes = Web3.toBytes(hexstr=error_msg[10:])
+    decoded_error_message = Web3.toText(error_data_bytes)
+    assert "ReentrancyGuard: reentrant call" in decoded_error_message
+
+
+@given(redeem_amount=strategy('uint256', min_value=100, max_value=1000),
+       mint_amount0=strategy('uint256', min_value=100, max_value=1000),
+       mint_amount1=strategy('uint256', min_value=100, max_value=1000))
+@settings(max_examples=50)
+def test_fuzz_undelegate_coin(earn, redeem_amount, mint_amount0, mint_amount1):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    earn.mint(operators[0], {'value': mint_amount0})
+    earn.mint(operators[1], {'value': mint_amount1})
+    validator_map = {
+        operators[0]: mint_amount0,
+        operators[1]: mint_amount1
+    }
+    earn.setDayInterval(0)
+    earn.setReduceTime(10)
+    earn.setUnDelegateValidatorState(False)
+    withdraw_amount = redeem_amount
+    if redeem_amount > (mint_amount0 + mint_amount1):
+        with brownie.reverts('ERC20: burn amount exceeds balance'):
+            earn.redeem(redeem_amount)
+            return
+    else:
+        earn.redeem(redeem_amount)
+        assert earn.getRedeemRecords(accounts[0])[0][2] == earn.getRedeemRecords(accounts[0])[0][3] == redeem_amount
+        for i in validator_map:
+            validator_amount = validator_map[i]
+            if redeem_amount == validator_amount:
+                redeem_amount = 0
+                break
+            elif redeem_amount < validator_amount:
+                if validator_amount >= redeem_amount + PLEDGE_LIMIT:
+                    redeem_amount = 0
+                    break
+                else:
+                    undelegate_amount = redeem_amount - PLEDGE_LIMIT
+                    if undelegate_amount > PLEDGE_LIMIT:
+                        redeem_amount -= undelegate_amount
+            else:
+                if redeem_amount >= validator_amount + PLEDGE_LIMIT:
+                    redeem_amount -= validator_amount
+                else:
+                    if (validator_amount - PLEDGE_LIMIT) > PLEDGE_LIMIT:
+                        redeem_amount -= (validator_amount - PLEDGE_LIMIT)
+        tracker0 = get_tracker(accounts[0])
+        if redeem_amount > 0:
+            error_msg = encode_args_with_signature("EarnUnDelegateFailedFinally(address,uint256)",
+                                                   [str(accounts[0].address), redeem_amount])
+            with brownie.reverts(f"typed error: {error_msg}"):
+                earn.withdraw()
+        else:
+            earn.withdraw()
+            assert tracker0.delta() == withdraw_amount
+
+
+@given(mint_amount=strategy('uint256', min_value=0, max_value=1000))
+def test_fuzz_mint_success(earn, mint_amount):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    if mint_amount > PLEDGE_LIMIT:
+        tracker0 = get_tracker(accounts[0])
+        earn.mint(operators[0], {'value': mint_amount})
+        assert tracker0.delta() == - mint_amount
+        assert earn.getValidatorDelegate(operators[0]) == mint_amount
+    else:
+        with brownie.reverts():
+            earn.redeem(mint_amount)
+
+
+@given(mint_amount0=strategy('uint256', min_value=100, max_value=1000),
+       mint_amount1=strategy('uint256', min_value=100, max_value=1000),
+       balance_threshold=strategy('uint256', min_value=10, max_value=1000)
+       )
+def test_fuzz_re_balance(earn, mint_amount0, mint_amount1, balance_threshold):
+    operators = []
+    consensuses = []
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    max_address = operators[1]
+    min_address = operators[0]
+    max_amount = mint_amount1
+    min_amount = mint_amount0
+    diff = mint_amount0 - mint_amount1
+    if diff > 0:
+        max_address = operators[0]
+        min_address = operators[1]
+        max_amount = mint_amount0
+        min_amount = mint_amount1
+    earn.updateBalanceThreshold(balance_threshold)
+    earn.mint(operators[0], {'value': mint_amount0})
+    earn.mint(operators[1], {'value': mint_amount1})
+    transfer_amount = abs(diff) // 2
+    from_address = operators[0]
+    from_amount = mint_amount0
+    if mint_amount0 == mint_amount1:
+        error_msg = encode_args_with_signature("EarnReBalanceNoNeed(address,address)",
+                                               [str(operators[0]), str(operators[0])])
+        with brownie.reverts(f"typed error: {error_msg}"):
+            earn.reBalance()
+    elif abs(diff) < balance_threshold:
+        error_msg = (encode_args_with_signature(
+            "EarnReBalanceAmountDifferenceLessThanThreshold(address,address,uint256,uint256,uint256)",
+            [str(max_address), str(min_address), max_amount, min_amount, balance_threshold]))
+        with brownie.reverts(f"typed error: {error_msg}"):
+            earn.reBalance()
+    else:
+        if diff < 0:
+            from_address = operators[1]
+            from_amount = mint_amount1
+        if transfer_amount > PLEDGE_LIMIT:
+            earn.reBalance()
+            assert earn.getValidatorDelegate(max_address) == max_amount - transfer_amount
+            assert earn.getValidatorDelegate(min_address) == min_amount + transfer_amount
+        else:
+            error_msg = encode_args_with_signature("EarnReBalanceInvalidTransferAmount(address,uint256,uint256)",
+                                                   [str(from_address), from_amount, transfer_amount])
+            with brownie.reverts(f"typed error: {error_msg}"):
+                earn.reBalance()
+
+
+@given(mint_amount0=strategy('uint256', min_value=1000, max_value=5000),
+       mint_amount1=strategy('uint256', min_value=1000, max_value=5000),
+       reward=strategy('uint256', min_value=300, max_value=400),
+       )
+def test_fuzz_calculate_exchange_rate(earn, validator_set, pledge_agent, mint_amount0, mint_amount1, reward):
+    operators = []
+    consensuses = []
+    block_reward1 = reward * ONE_ETHER
+    tx_fee = 0.01 * ONE_ETHER
+    total_reward1 = (block_reward1 + tx_fee) * 90 / 100 // 2
+    validator_set.updateBlockReward(block_reward1)
+    mint_amount0 = mint_amount0 * ONE_ETHER
+    mint_amount1 = mint_amount1 * ONE_ETHER
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    delegate_amount = MIN_DELEGATE_VALUE // 5 * 3 * ONE_ETHER
+    pledge_agent.delegateCoin(operators[0], {'value': delegate_amount, 'from': accounts[1]})
+    pledge_agent.delegateCoin(operators[1], {'value': delegate_amount, 'from': accounts[1]})
+    earn.mint(operators[0], {'value': mint_amount0})
+    earn.mint(operators[1], {'value': mint_amount1})
+    pledge_agent_limit = 1.5 * ONE_ETHER
+    earn.updatePledgeAgentLimit(pledge_agent_limit)
+    turn_round(consensuses, round_count=2, tx_fee=tx_fee, trigger=True)
+    agent_reward0 = total_reward1 - (total_reward1 * delegate_amount // (delegate_amount + mint_amount0))
+    agent_reward1 = total_reward1 - (total_reward1 * delegate_amount // (delegate_amount + mint_amount1))
+    actual_rewards = (agent_reward0 + agent_reward1)
+    if actual_rewards < pledge_agent_limit:
+        actual_rewards = 0
+    exchange_rate = (actual_rewards + mint_amount0 + mint_amount1) * RATE_MULTIPLE // (mint_amount0 + mint_amount1)
+    assert earn.getCurrentExchangeRate() == exchange_rate
+
+
+@given(mint_amount0=strategy('uint256', min_value=1000, max_value=5000),
+       mint_amount1=strategy('uint256', min_value=1000, max_value=5000),
+       reward=strategy('uint256', min_value=300, max_value=400),
+       redeem_amount=strategy('uint256', min_value=1000, max_value=5000),
+       )
+def test_fuzz_invest_and_withdraw(earn, validator_set, pledge_agent, mint_amount0, mint_amount1, reward, redeem_amount):
+    operators = []
+    consensuses = []
+    block_reward1 = reward * ONE_ETHER
+    total_reward1 = (block_reward1) * 90 / 100 // 2
+    validator_set.updateBlockReward(block_reward1)
+    mint_amount0 = mint_amount0 * ONE_ETHER
+    mint_amount1 = mint_amount1 * ONE_ETHER
+    redeem_amount = redeem_amount * ONE_ETHER
+    earn.updatePledgeAgentLimit(ONE_ETHER)
+    for operator in accounts[3:5]:
+        operators.append(operator)
+        consensuses.append(register_candidate(operator=operator))
+    turn_round()
+    delegate_amount = MIN_DELEGATE_VALUE // 5 * 3 * ONE_ETHER
+    pledge_agent.delegateCoin(operators[0], {'value': delegate_amount, 'from': accounts[1]})
+    pledge_agent.delegateCoin(operators[1], {'value': delegate_amount, 'from': accounts[1]})
+    earn.mint(operators[0], {'value': ONE_ETHER * 2, 'from': accounts[2]})
+    earn.mint(operators[0], {'value': mint_amount0})
+    earn.mint(operators[1], {'value': mint_amount1})
+    pledge_agent_limit = ONE_ETHER
+    earn.updatePledgeAgentLimit(pledge_agent_limit)
+    turn_round(consensuses, round_count=2, trigger=True)
+    agent_reward0 = total_reward1 - (
+            total_reward1 * delegate_amount // (delegate_amount + mint_amount0 + ONE_ETHER * 2))
+    agent_reward1 = total_reward1 - (total_reward1 * delegate_amount // (delegate_amount + mint_amount1))
+    actual_rewards = (agent_reward0 + agent_reward1)
+    if actual_rewards < pledge_agent_limit:
+        actual_rewards = 0
+    exchange_rate = (actual_rewards + mint_amount0 + mint_amount1 + ONE_ETHER * 2) * RATE_MULTIPLE // (
+            mint_amount0 + mint_amount1 + ONE_ETHER * 2)
+    earn.setDayInterval(0)
+    earn.setReduceTime(10)
+    if redeem_amount > (mint_amount0 + mint_amount1):
+        with brownie.reverts():
+            earn.redeem(redeem_amount)
+    else:
+        earn.redeem(redeem_amount)
+        tracker0 = get_tracker(accounts[0])
+        earn.withdraw()
+        assert tracker0.delta() == Decimal(f'{redeem_amount}') * Decimal(f'{exchange_rate}') / Decimal(
+            f'{RATE_MULTIPLE}')

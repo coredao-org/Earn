@@ -8,7 +8,6 @@ contract EarnMock is Earn {
         mintMinLimit = mintMinLimit / 1e16;
         redeemMinLimit = redeemMinLimit / 1e16;
         pledgeAgentLimit = pledgeAgentLimit / 1e16;
-
     }
 
     function setContractAddress(address candidateAddress, address pledgeAgentAddress, uint256 roundTag) external {
@@ -26,7 +25,7 @@ contract EarnMock is Earn {
         afterTurnRoundClaimReward = claim;
     }
 
-    function setInitDayInterval(uint256 value) external {
+    function setDayInterval(uint256 value) external {
         DAY_INTERVAL = value;
     }
 
@@ -49,4 +48,9 @@ contract EarnMock is Earn {
     function getCurrentRound() external view returns (uint256) {
         return ICandidateHub(CANDIDATE_HUB).getRoundTag();
     }
+
+    function testRandomIndex(uint256 length) external view returns (uint256) {
+        return uint256(keccak256(abi.encode(msg.sender, roundTag))) % length;
+    }
+
 }

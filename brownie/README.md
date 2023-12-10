@@ -24,6 +24,6 @@ cd brownie
 ./generate-test-contracts.sh
 
 # run brownie tests
-brownie test -v 
+brownie test -v --stateful false 
 ```
 

@@ -4,7 +4,7 @@ from brownie.network.transaction import TransactionReceipt
 from brownie.network.account import LocalAccount
 from brownie import chain, web3, history
 from eth_account import Account
-from eth_abi import encode
+from eth_abi import encode, encode_abi
 
 
 def random_address():
@@ -36,6 +36,9 @@ class AccountTracker:
         self.height = chain.height
         return self.account.balance()
 
+    def current_balance(self):
+        return self.account.balance()
+
     def update_height(self):
         self.height = chain.height
 
@@ -58,6 +61,12 @@ def get_tracker(account: LocalAccount) -> AccountTracker:
 
 def padding_left(hex_str, length):
     return '0x' + hex_str[2:].zfill(length)
+
+
+def transaction_raw_data(function_name, function_type, function_value):
+    raw_data = Web3.keccak(text=function_name)[:4].hex() + encode_abi(
+        function_type, function_value).hex()
+    return raw_data
 
 
 def encode_args_with_signature(function_signature: str, args: list) -> str:
