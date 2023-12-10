@@ -111,7 +111,7 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
     event UpdatePledgeAgentLimit(address indexed caller, uint256 pledgeAgentLimit);
     event UpdateLockDay(address indexed caller, uint256 lockDay);
     event UpdateProtocolFeePoints(address indexed caller, uint256 protocolFeePoints);
-    event UpdateProtocolFeeReveiver(address indexed caller, address protocolFeeReceiver);
+    event UpdateProtocolFeeReceiver(address indexed caller, address protocolFeeReceiver);
     event UpdateOperator(address indexed caller, address operator);
     event UpdateRedeemCountLimit(address indexed caller, uint256 redeemCountLimit);
     event UpdateExchangeRateQueryLimit(address indexed caller, uint256 exchangeRateQueryLimit);
@@ -680,12 +680,12 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateProtocolFeePoints(msg.sender, _protocolFeePoints);
     }
 
-    function updateProtocolFeeReveiver(address _protocolFeeReceiver) external onlyOwner {
+    function updateProtocolFeeReceiver(address _protocolFeeReceiver) external onlyOwner {
         if (_protocolFeeReceiver == address(0)) {
             revert IEarnErrors.EarnZeroProtocolFeeReceiver(_protocolFeeReceiver);
         }
         protocolFeeReceiver = _protocolFeeReceiver;
-        emit UpdateProtocolFeeReveiver(msg.sender, _protocolFeeReceiver);
+        emit UpdateProtocolFeeReceiver(msg.sender, _protocolFeeReceiver);
     }
 
     function updateOperator(address _operator) external onlyOwner {
