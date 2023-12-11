@@ -18,8 +18,11 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 
-// TODO Improve comments + NatSpecs
-
+/**
+ * @dev The primary purposes of introducing Core LST are:
+ *   1. Improve user experience
+ *   2. Bring more utilities of CORE token
+ */
 contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable, UUPSUpgradeable {
     using IterableAddressDelegateMapping for IterableAddressDelegateMapping.Map;
     using Address for address payable;
@@ -116,10 +119,17 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
     event UpdateRedeemCountLimit(address indexed caller, uint256 redeemCountLimit);
     event UpdateExchangeRateQueryLimit(address indexed caller, uint256 exchangeRateQueryLimit);
 
+    /**
+     * @dev Invoke the {Initializable}.{_disableInitializers} function in the constructor
+     * to prevent the implementation contract from being used.
+     */
     constructor() {
         _disableInitializers();
     }
 
+    /**
+     * @dev Contract initialization function, used to initialize fields when creating proxy.
+     */
     function initialize(address _stCore, address _protocolFeeReceiver, address _operator) external initializer {
         __Ownable2Step_init();
         __UUPSUpgradeable_init();
@@ -158,20 +168,33 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         toWithdrawAmount = 0;
     }
 
+    /**
+     * @dev Implements {UUPSUpgradeable}.{_authorizeUpgrade()},
+     * can be used to implement contract upgrade logic if needed.
+     */
     function _authorizeUpgrade(address newImplementation) internal onlyOwner override {}
 
     /// --- MODIFIERS --- ///
 
+    /**
+     * @dev Modifier to make a function callable only when {msg.sender} is {operator}.
+     */
     modifier onlyOperator() {
         require(msg.sender == operator, "Not operator");
         _;
     }
 
+    /**
+     * @dev Modifier to make a function callable only after {afterTurnRound} is called at the beginning of a round.
+     */
     modifier afterSettled() {
         require(roundTag == _currentRound(), "Turn round not executed");
         _;
     }
 
+    /**
+     * @dev Modifier to make a function callable only when validator can delegate.
+     */
     modifier canDelegate(address _validator) {
         require (ICandidateHub(CANDIDATE_HUB).canDelegate(_validator), "Can not delegate to validator");
         _;
@@ -179,9 +202,11 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
     
     /// --- USER INTERACTIONS --- ///
 
-    // Mint stCORE using CORE 
-    // The caller needs to pass in the validator address to delegate to
-    // By doing so Earn treats existing validators/new comers equally
+    /**
+     * @dev Mint stCORE using CORE.
+     * The caller needs to pass in the validator address to delegate to.
+     * By doing so Earn treats existing validators/new comers equally.
+     */
     function mint(address _validator) external payable afterSettled nonReentrant whenNotPaused canDelegate(_validator) {
         address account = msg.sender;
         uint256 amount = msg.value;
@@ -201,7 +226,9 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit Mint(account, amount, stCore);
     }
 
-    // Redeem stCORE to get back CORE
+    /**
+     * @dev Redeem stCORE to get back CORE.
+     */
     function redeem(uint256 stCore) external afterSettled nonReentrant whenNotPaused{
         address account = msg.sender;
         RedeemRecord[] storage records = redeemRecords[account];
@@ -239,7 +266,9 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit Redeem(account, stCore, redeemAmount, protocolFee);
     }
 
-    // Withdraw CORE tokens after redemption period
+    /**
+     * @dev Withdraw CORE tokens after redemption period.
+     */
     function withdraw() external afterSettled nonReentrant whenNotPaused{
         address account = msg.sender;
         
@@ -290,16 +319,18 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
 
     /// --- OPERATOR INTERACTIONS --- ///
 
-    // Triggered right after Core blockchain turns to a new round
-    // Users are not allowed to operate before this method is executed successfully in each round
-    // The Earn contract does following in this method
-    //  1. Claim rewards from each validator
-    //  2. Stake rewards back to one randomly chosen active validator (auto compounding)
-    //  3. Update daily exchange rate
-    // During the process, this method also undelegates from inactive validators 
-    // The operator can also pass in new elected validators to act as a fallback catch
-    //  in the case where all existing validators are replaced in the new round
-    // The parameter type is set to address[] instead of address for forward compatibilities
+    /**
+     * @dev Triggered right after Core blockchain turns to a new round.
+     * Users are not allowed to operate before this method is executed successfully in each round.
+     * The Earn contract does following in this method
+     *   1. Claim rewards from each validator
+     *   2. Stake rewards back to one randomly chosen active validator (auto compounding)
+     *   3. Update daily exchange rate
+     * During the process, this method also undelegates from inactive validators.
+     * The operator can also pass in new elected validators to act as a fallback catch
+     * in the case where all existing validators are replaced in the new round.
+     * The parameter type is set to address[] instead of address for forward compatibilities.
+     */
     function afterTurnRound(address[] memory newElectedValidators) external onlyOperator {
         // Claim rewards
         for (uint i = validatorDelegateMap.size(); i != 0; i--) {
@@ -361,8 +392,10 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         roundTag = currentRound;
     }
 
-    // This method can be triggered on a regular basis, e.g. hourly/daily/weekly/etc
-    // The Earn contract rebalances staking on top/bottom validators in this method
+    /**
+     * @dev This method can be triggered on a regular basis, e.g. hourly/daily/weekly/etc.
+     * The Earn contract rebalances staking on top/bottom validators in this method.
+     */
     function reBalance() external afterSettled onlyOperator{
         if (validatorDelegateMap.size() <= 1) {
             revert IEarnErrors.EarnEmptyValidator();
@@ -403,9 +436,11 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         _reBalanceTransfer(maxValidator, minValidator, max, transferAmount);
     }
 
-    // This method is introduce to take necessary actions to improve earning
-    // e.g. to transfer stakes from a jailed validator to another before turn round
-    // e.g. to transfer stakes from a low APR validator to a high APR validator
+    /**
+     * @dev This method is introduce to take necessary actions to improve earning.
+     * e.g. to transfer stakes from a jailed validator to another before turn round.
+     * e.g. to transfer stakes from a low APR validator to a high APR validator.
+     */
     function manualReBalance(address _from, address _to, uint256 _transferAmount) external afterSettled onlyOperator canDelegate(_to){
         if (validatorDelegateMap.size() == 0) {
             revert IEarnErrors.EarnEmptyValidator();
@@ -421,10 +456,17 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
     }
 
     /// --- VIEW METHODS ---///
+
+    /**
+     * @dev Returns redemption records based on the given address.
+     */
     function getRedeemRecords(address _account) external view returns (RedeemRecord[] memory) {
         return redeemRecords[_account];
     }
 
+    /**
+     * @dev Returns the lock and unlock amount based on the given address.
+     */
     function getRedeemAmount(address _account) external view returns (uint256 unlockedAmount, uint256 lockedAmount) {
         RedeemRecord[] storage records = redeemRecords[_account];
         for (uint256 i = 0; i < records.length; i++) {
@@ -437,6 +479,9 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         }
     }
 
+    /**
+     * @dev Returns the exchange rate of the last {target} days.
+     */
     function getExchangeRates(uint256 target) external view returns(uint256[] memory _exchangeRates) {
         if (target > exchangeRateQueryLimit) {
             return _exchangeRates;
@@ -462,10 +507,16 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         }
     }
 
+    /**
+     * @dev Returns current latest exchange rate.
+     */
     function getCurrentExchangeRate() external view  returns (uint256) {
         return exchangeRates[exchangeRates.length - 1];
     } 
 
+    /**
+     * @dev Returns the total amount delegated in {PLEDGE_AGENT} for this contract.
+     */
     function getTotalDelegateAmount() external view returns (uint256) {
         uint256 amount = 0;
         uint256 mapSize = validatorDelegateMap.size();
@@ -478,31 +529,41 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
 
     /// --- INTERNAL METHODS --- ///
 
-    // Get current round
+    /**
+     * @dev Returns the current round.
+     * Calls {CANDIDATE_HUB.getRoundTag()}.
+     */
     function _currentRound() private view returns (uint256) {
         return ICandidateHub(CANDIDATE_HUB).getRoundTag();
     }
 
-    // Core to STCore
+    /**
+     * @dev Exchanges core to stCore.
+     */
     function _exchangeSTCore(uint256 core) private view returns (uint256) {
         return core * RATE_BASE / exchangeRates[exchangeRates.length-1];
     }
 
-    // STCore to Core
+    /**
+     * @dev Exchanges stCore to core.
+     */
     function _exchangeCore(uint256 stCore) private view returns(uint256) {
         return stCore * exchangeRates[exchangeRates.length-1] / RATE_BASE;
     }
 
-    // Undelegate CORE from validators with strategy
-    // There is dues protection in PledageAgent, which are
-    //  1. Can only delegate 1+ CORE
-    //  2. Can only undelegate 1+ CORE AND can only leave 1+ CORE on validator after undelegate 
-    // Internally, Earn delegates/undelegates on validators for each mint/redeem action
-    // As a result, to make the system solid. Any undelegate action on a validator from Earn must result in
-    //  1. The validator must be cleared or have 1+ CORE remaining after undelegate 
-    //     AND
-    //  2. Earn contract must have 0 or 1+ CORE left to further undelegate
-    // Otherwise, Earn might fail to undelegate further because of the dues protection from PledgeAgent
+    /**
+     * @dev Exchanges core to stCore.
+     * Undelegate CORE from validators with strategy.
+     * There is dues protection in PledageAgent, which are
+     *   1. Can only delegate 1+ CORE
+     *   2. Can only undelegate 1+ CORE AND can only leave 1+ CORE on validator after undelegate
+     * Internally, Earn delegates/undelegates on validators for each mint/redeem action.
+     * As a result, to make the system solid. Any undelegate action on a validator from Earn must result in
+     *   1. The validator must be cleared or have 1+ CORE remaining after undelegate.
+     *     AND
+     *   2. Earn contract must have 0 or 1+ CORE left to further undelegate.
+     * Otherwise, Earn might fail to undelegate further because of the dues protection from PledgeAgent.
+     */
     function _unDelegateWithStrategy(uint256 amount) private {
         // Random validator position
         uint256 length = validatorDelegateMap.size();
@@ -575,6 +636,9 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         }
     }
 
+    /**
+     * @dev Calls {PLEDGE_AGENT} to perform {delegateCoin()} operation.
+     */
     function _delegate(address validator, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).delegateCoin{value: amount}(validator);
         // Update delegate record
@@ -582,6 +646,11 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit Delegate(validator, amount);
     }
 
+    /**
+     * @dev Calls {PLEDGE_AGENT} to perform {undelegateCoin()} operation.
+     * If the amount is 0, then delete validator from {validatorDelegateMap}.
+     * The delete action only occurs in the {afterTurnRound} function when the validator is invalid.
+     */
     function _unDelegate(address validator, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
         if (amount == 0) {
@@ -594,6 +663,9 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UnDelegate(validator, amount);
     }
 
+    /**
+     * @dev Calls {PLEDGE_AGENT} to perform {transferCoin()} operation.
+     */
     function _transfer(address from, address to, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).transferCoin(from, to, amount);
         // Update delegate record
@@ -602,16 +674,25 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit Transfer(from, to, amount);
     }
 
+    /**
+     * @dev Calls {PLEDGE_AGENT} to perform {claimReward()} operation.
+     */
     function _claim(address validator) private {
         address[] memory addresses = new address[](1);
         addresses[0] = validator;
         IPledgeAgent(PLEDGE_AGENT).claimReward(addresses);
     }
 
+    /**
+     * @dev Returns a random number based on the length of array.
+     */
     function _randomIndex(uint256 length) private view returns (uint256) {
         return uint256(keccak256(abi.encodePacked(block.timestamp, block.difficulty, msg.sender))) % length;
     }
 
+    /**
+     * @dev Determine whether the validator is active based on {CANDIDATE_HUB}.
+     */
     function _isActive(address validator) private view returns (bool) {
         uint256 indexPlus1 = ICandidateHub(CANDIDATE_HUB).operateMap(validator);
         if (indexPlus1 == 0) {
@@ -621,6 +702,10 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         return candidate.status == VALIDATOR_ACTIVE_STATUS;
     }
 
+    /**
+     * @dev Transfer amount from a validator to another.
+     * The funcion is reused by {reBalance()} and {manualReBalance()}.
+     */
     function _reBalanceTransfer(address _from, address _to, uint256 _fromAmount, uint256 _transferAmount) private {
         if (_transferAmount >= pledgeAgentLimit && (_fromAmount ==_transferAmount ||  _fromAmount - _transferAmount >= pledgeAgentLimit)) {
             _transfer(_from, _to, _transferAmount);
@@ -632,6 +717,17 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
 
     /// --- ADMIN OPERATIONS --- ///
 
+    /**
+     * @dev Updates the threshold between the maximum and minimum amount pledged.
+     * If the amount difference is less than the threshold, the rebalance operation is not performed.
+     * The default value is 10000 core.
+     *
+     * Emits an {UpdateBalanceThreshold} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateBalanceThreshold(uint256 _balanceThreshold) external onlyOwner {
         if (_balanceThreshold == 0) {
             revert IEarnErrors.EarnBalanceThresholdMustGreaterThanZero();
@@ -640,6 +736,16 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateBalanceThreshold(msg.sender, _balanceThreshold);
     }
 
+    /**
+     * @dev Updates the minimum amount of user mint operation.
+     * The default value is 1 core.
+     *
+     * Emits an {UpdateMintMinLimit} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateMintMinLimit(uint256 _mintMinLimit) external onlyOwner {
         if (_mintMinLimit < 1 ether) {
             revert IEarnErrors.EarnMintMinLimitMustGreaterThan1Core();
@@ -648,6 +754,16 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateMintMinLimit(msg.sender, _mintMinLimit);
     }
 
+    /**
+     * @dev Updates the minimum amount of user redemption.
+     * The default value is 1 stCore.
+     *
+     * Emits an {UpdateRedeemMinLimit} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateRedeemMinLimit(uint256 _redeemMinLimit) external onlyOwner {
         if (_redeemMinLimit < 1 ether) {
             revert IEarnErrors.EarnRedeemMinLimitMustGreaterThan1Core();
@@ -656,6 +772,16 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateRedeemMinLimit(msg.sender, _redeemMinLimit);
     }
 
+    /**
+     * @dev Updates the minimum amount of the pledge operation.
+     * The default value is 1 core, which is limited by {PLEDGE_AGENT}.
+     *
+     * Emits an {UpdatePledgeAgentLimit} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updatePledgeAgentLimit(uint256 _pledgeAgentLimit) external onlyOwner {
         if (_pledgeAgentLimit < 1 ether) {
             revert IEarnErrors.EarnPledgeAgentLimitMustGreaterThan1Core();
@@ -664,6 +790,15 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdatePledgeAgentLimit(msg.sender, _pledgeAgentLimit);
     }
 
+    /**
+     * @dev Updates the user redemption lockup period.
+     *
+     * Emits an {UpdateLockDay} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateLockDay(uint256 _lockDay) external onlyOwner {
         if (_lockDay == 0) {
             revert IEarnErrors.EarnLockDayMustGreaterThanZero();
@@ -672,6 +807,15 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateLockDay(msg.sender, _lockDay);
     }
 
+    /**
+     * @dev Updates the rate of protocol fee.
+     *
+     * Emits an {UpdateProtocolFeePoints} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateProtocolFeePoints(uint256 _protocolFeePoints) external onlyOwner {
         if (_protocolFeePoints > RATE_BASE) {
             revert IEarnErrors.EarnProtocolFeePointMoreThanRateBase(_protocolFeePoints);
@@ -680,6 +824,16 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateProtocolFeePoints(msg.sender, _protocolFeePoints);
     }
 
+    /**
+     * @dev Updates the address of protocol fee receiver.
+     * The receiver receives the fees generated by the user's participation in making money.
+     *
+     * Emits an {UpdateProtocolFeeReceiver} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateProtocolFeeReceiver(address _protocolFeeReceiver) external onlyOwner {
         if (_protocolFeeReceiver == address(0)) {
             revert IEarnErrors.EarnZeroProtocolFeeReceiver(_protocolFeeReceiver);
@@ -688,6 +842,16 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateProtocolFeeReceiver(msg.sender, _protocolFeeReceiver);
     }
 
+    /**
+     * @dev Updates the address of the operator role.
+     * The operator role can call functions modified by {onlyOperator}.
+     *
+     * Emits an {UpdateOperator} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateOperator(address _operator) external onlyOwner {
         if (_operator == address(0)) {
             revert IEarnErrors.EarnZeroOperator(_operator);
@@ -696,6 +860,15 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateOperator(msg.sender, _operator);
     }
 
+    /**
+     * @dev Updates the maximum number of redemption records stored.
+     *
+     * Emits an {UpdateRedeemCountLimit} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateRedeemCountLimit(uint256 _redeemCountLimit) external onlyOwner {
         if (_redeemCountLimit == 0) {
             revert IEarnErrors.EarnRedeemCountLimitMustGreaterThanZero();
@@ -704,6 +877,15 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateRedeemCountLimit(msg.sender, _redeemCountLimit);
     }
 
+    /**
+     * @dev Updates the number of items returned from the exchange rate query.
+     *
+     * Emits an {UpdateExchangeRateQueryLimit} event.
+     *
+     * Requirements:
+     *
+     * - The caller must be owner.
+     */
     function updateExchangeRateQueryLimit(uint256 _exchangeRateQueryLimit) external onlyOwner {
         if (_exchangeRateQueryLimit == 0) {
             revert IEarnErrors.EarnExchangeRateQueryLimitMustGreaterThanZero();
@@ -712,14 +894,35 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         emit UpdateExchangeRateQueryLimit(msg.sender, _exchangeRateQueryLimit);
     }
 
+    /**
+     * @dev Triggers stopped state.
+     *
+     * Calls {PausableUpgradeable.sol._pause()}.
+     *
+     * Requirements:
+     *
+     * - The contract must not be paused.
+     */
     function pause() external onlyOwner {
         _pause();
     }
 
+    /**
+     * @dev Returns to normal state.
+     *
+     * Calls {PausableUpgradeable.sol._unpause()}.
+     *
+     * Requirements:
+     *
+     * - The contract must be paused.
+     */
     function unpause() external onlyOwner {
         _unpause();
     }
 
+    /**
+     * @dev Only receive rewards from {PLEDGE_AGENT}.
+     */
     receive() external payable {
         if (msg.sender != PLEDGE_AGENT) {
             revert IEarnErrors.EarnTransferAmountProhibit(msg.sender);
