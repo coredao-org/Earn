@@ -269,7 +269,7 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
     /**
      * @dev Withdraw CORE tokens after redemption period.
      */
-    function withdraw() external afterSettled nonReentrant whenNotPaused{
+    function withdraw() external afterSettled nonReentrant {
         address account = msg.sender;
         
         // Find user redeem records
