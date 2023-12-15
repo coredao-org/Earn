@@ -4,9 +4,9 @@ pragma solidity 0.8.4;
 import {ISTCoreErrors} from "./interface/IErrors.sol";
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 
-contract STCore is ERC20, Ownable {
+contract STCore is ERC20, Ownable2Step {
     address public earn;
 
     bool private setEarnCalled = false;
