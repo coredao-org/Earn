@@ -652,11 +652,17 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
      * The delete action only occurs in the {afterTurnRound} function when the validator is invalid.
      */
     function _unDelegate(address validator, uint256 amount) private {
-        IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
         if (amount == 0) {
+            // The case only occurs in the {afterTurnRound} function when the validator is invalid.
+            if (validatorDelegateMap.get(validator) >= pledgeAgentLimit) {
+                // The undelegateCoin needs to be called
+                // only if the current delegate amount is greater than or equal to limit.
+                IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
+            }
             // Remove delegate record
             validatorDelegateMap.remove(validator);
         } else {
+            IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
             // Update delegate record
             validatorDelegateMap.substract(validator, amount);
         }
