@@ -31,7 +31,7 @@ library IterableAddressDelegateMapping {
         }
     }
 
-    function substract(Map storage map, address key, uint256 val) internal {
+    function subtract(Map storage map, address key, uint256 val) internal {
         if (map.indexOf[key] != 0) {
              map.values[key] -= val;
         } 

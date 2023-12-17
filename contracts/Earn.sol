@@ -664,7 +664,7 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         } else {
             IPledgeAgent(PLEDGE_AGENT).undelegateCoin( validator, amount);
             // Update delegate record
-            validatorDelegateMap.substract(validator, amount);
+            validatorDelegateMap.subtract(validator, amount);
         }
         emit UnDelegate(validator, amount);
     }
@@ -675,7 +675,7 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
     function _transfer(address from, address to, uint256 amount) private {
         IPledgeAgent(PLEDGE_AGENT).transferCoin(from, to, amount);
         // Update delegate record
-        validatorDelegateMap.substract(from, amount);
+        validatorDelegateMap.subtract(from, amount);
         validatorDelegateMap.add(to, amount);
         emit Transfer(from, to, amount);
     }
