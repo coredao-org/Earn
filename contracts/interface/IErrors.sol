@@ -36,7 +36,7 @@ interface IEarnErrors {
     error EarnCallStCoreBurnFailed(address account, uint256 amount, uint256 stCore);
     error EarnUnDelegateFailedFinally(address validator, uint256 amount);
     error EarnEmptyValidator();
-    error EarnRdeemCountOverLimit(address account, uint256 redeemCount, uint256 limit);
+    error EarnRedeemCountOverLimit(address account, uint256 redeemCount, uint256 limit);
 
     // withdraw related errors
     error EarnEmptyRedeemRecord();

@@ -234,7 +234,7 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         RedeemRecord[] storage records = redeemRecords[account];
         
         if (records.length >= redeemCountLimit) {
-            revert IEarnErrors.EarnRdeemCountOverLimit(account, records.length, redeemCountLimit);
+            revert IEarnErrors.EarnRedeemCountOverLimit(account, records.length, redeemCountLimit);
         }
 
         // Dues protection
