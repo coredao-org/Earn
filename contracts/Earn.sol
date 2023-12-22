@@ -471,7 +471,7 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
         RedeemRecord[] storage records = redeemRecords[_account];
         for (uint256 i = 0; i < records.length; i++) {
             RedeemRecord memory record = records[i];
-             if (record.unlockTime >= block.timestamp) {
+             if (record.unlockTime < block.timestamp) {
                 unlockedAmount += record.amount;
             } else {
                 lockedAmount += record.amount;
