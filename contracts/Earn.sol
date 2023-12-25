@@ -693,7 +693,7 @@ contract Earn is Initializable, Ownable2StepUpgradeable, ReentrancyGuardUpgradea
      * @dev Returns a random number based on the length of array.
      */
     function _randomIndex(uint256 length) private view returns (uint256) {
-        return uint256(keccak256(abi.encode(block.timestamp, block.difficulty, msg.sender))) % length;
+        return uint256(keccak256(abi.encode(msg.sender, roundTag))) % length;
     }
 
     /**
