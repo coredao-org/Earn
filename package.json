@@ -18,7 +18,9 @@
   "homepage": "https://github.com/coredao-org/Earn#readme",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^3.0.0",
-    "hardhat": "^2.19.1"
+    "hardhat": "^2.19.1",
+    "@openzeppelin/hardhat-upgrades": "^2.4.3",
+    "@nomicfoundation/hardhat-verify": "^2.0.4"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^4.9.3",

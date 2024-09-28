@@ -25,3 +25,10 @@ brownie/contracts/lib
 brownie/contracts/system_contracts
 brownie/contracts/*.sol
 brownie/interfaces
+.openzeppelin
+.states
+
+dev.conf
+dev2.conf
+main.conf
+test.conf
